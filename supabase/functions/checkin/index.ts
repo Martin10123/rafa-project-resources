@@ -8,9 +8,14 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-/** Dominio permitido (debe coincidir con trigger en perfiles). */
-const ALLOWED_EMAIL_DOMAIN = Deno.env.get('ALLOWED_EMAIL_DOMAIN') ?? 'tecnocomfenalco.edu.co'
-const RAFA_ADMIN_EMAIL = 'aux.audiovisual6@tecnologicocomfenalco.edu.co'
+/** Dominios permitidos (debe coincidir con trigger en perfiles). */
+const ALLOWED_EMAIL_DOMAINS = new Set(
+  (Deno.env.get('ALLOWED_EMAIL_DOMAINS') ??
+    'tecnocomfenalco.edu.co,tecnologicocomfenalco.edu.co')
+    .split(',')
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean),
+)
 
 /** Upstash Redis REST (opcional — stub si faltan claves). */
 const UPSTASH_REDIS_REST_URL = Deno.env.get('UPSTASH_REDIS_REST_URL')
@@ -104,8 +109,11 @@ Deno.serve(async (req: Request) => {
 
   const email = (userData.user.email ?? '').toLowerCase()
   const domain = emailDomain(email)
-  if (email !== RAFA_ADMIN_EMAIL && domain !== ALLOWED_EMAIL_DOMAIN.toLowerCase()) {
-    return jsonResponse({ error: `Solo correos @${ALLOWED_EMAIL_DOMAIN}` }, 403)
+  if (!ALLOWED_EMAIL_DOMAINS.has(domain)) {
+    return jsonResponse(
+      { error: 'Solo correos @tecnocomfenalco.edu.co o @tecnologicocomfenalco.edu.co' },
+      403,
+    )
   }
 
   const rate = await checkRateLimit(`checkin:${userData.user.id}`)

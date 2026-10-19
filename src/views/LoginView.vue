@@ -8,7 +8,7 @@ import InputText from 'primevue/inputtext'
 import Password from 'primevue/password'
 import Textarea from 'primevue/textarea'
 import { resolvePostLoginPath } from '../lib/postLogin'
-import { ALLOWED_EMAIL_DOMAIN, useAuthStore } from '../stores/auth'
+import { useAuthStore } from '../stores/auth'
 
 type Step = 'login' | 'register' | 'confirm-sent' | 'forgot' | 'set-password'
 type GlyphNode = { tag: string; attrs: Record<string, string | number> }
@@ -192,7 +192,7 @@ const highlights = [
   {
     icon: 'shield' as const,
     title: 'Acceso institucional',
-    text: `Solo cuentas @${ALLOWED_EMAIL_DOMAIN}.`,
+    text: 'Solo cuentas institucionales Comfenalco.',
   },
 ]
 
@@ -535,7 +535,13 @@ onMounted(async () => {
             <p id="auth-help" class="mt-2 mb-0 text-[0.95rem] leading-relaxed text-slate-600">
               <template v-if="step === 'login'">
                 Usa tu usuario o correo
-                <strong class="inline-block font-semibold text-navy">@{{ ALLOWED_EMAIL_DOMAIN }}</strong>
+                <strong class="inline-block font-semibold text-navy"
+                  >@tecnocomfenalco.edu.co</strong
+                >
+                o
+                <strong class="inline-block font-semibold text-navy"
+                  >@tecnologicocomfenalco.edu.co</strong
+                >
                 y tu contraseña.
               </template>
               <template v-else-if="step === 'register'">

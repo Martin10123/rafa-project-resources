@@ -3,12 +3,17 @@ import { computed, ref } from 'vue'
 import { authCallbackUrl, isSupabaseConfigured, supabase } from '../lib/supabase'
 import type { Perfil } from '../types'
 
+/** Dominio por defecto al escribir solo el usuario (sin @). */
 export const ALLOWED_EMAIL_DOMAIN = 'tecnocomfenalco.edu.co'
 
-/** Correo de Rafa. Se acepta además del dominio institucional. */
-export const RAFA_ADMIN_EMAIL = 'aux.audiovisual6@tecnologicocomfenalco.edu.co'
+/** Dominios institucionales permitidos. */
+export const ALLOWED_EMAIL_DOMAINS = [
+  'tecnocomfenalco.edu.co',
+  'tecnologicocomfenalco.edu.co',
+] as const
 
-const EXTRA_ALLOWED_EMAILS = new Set([RAFA_ADMIN_EMAIL])
+/** Admin Rafa (correo con dominio “tecnologico…”). */
+export const RAFA_ADMIN_EMAIL = 'aux.audiovisual6@tecnologicocomfenalco.edu.co'
 
 const DEMO_SESSION_STORAGE_KEY = 'educative-resources-demo-auth'
 const MIN_PASSWORD_LENGTH = 8
@@ -17,10 +22,10 @@ type DemoSessionStored = { email: string; nombre: string | null }
 
 export function isAllowedEmail(raw: string): boolean {
   const normalized = raw.trim().toLowerCase()
-  if (EXTRA_ALLOWED_EMAILS.has(normalized)) return true
   const at = normalized.lastIndexOf('@')
   if (at <= 0) return false
-  return normalized.slice(at + 1) === ALLOWED_EMAIL_DOMAIN
+  const domain = normalized.slice(at + 1)
+  return (ALLOWED_EMAIL_DOMAINS as readonly string[]).includes(domain)
 }
 
 /** Acepta correo completo o usuario (ej. msimarras → msimarras@tecnocomfenalco.edu.co). */
@@ -34,7 +39,11 @@ export function resolveInstitutionalEmail(
 
   if (trimmed.includes('@')) {
     if (!isAllowedEmail(trimmed)) {
-      return { ok: false, message: `Solo se permiten correos @${ALLOWED_EMAIL_DOMAIN}` }
+      return {
+        ok: false,
+        message:
+          'Solo se permiten correos @tecnocomfenalco.edu.co o @tecnologicocomfenalco.edu.co',
+      }
     }
     return { ok: true, email: trimmed }
   }
