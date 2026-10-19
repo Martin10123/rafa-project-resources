@@ -5,8 +5,6 @@ import Button from 'primevue/button'
 import Message from 'primevue/message'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
-import type { RealtimeChannel } from '@supabase/supabase-js'
-import { supabase } from '../../lib/supabase'
 import AdminPageHeader from './AdminPageHeader.vue'
 import { formatDateTime, useAdminStore } from '../../stores/admin'
 
@@ -14,29 +12,20 @@ const admin = useAdminStore()
 const confirm = useConfirm()
 const toast = useToast()
 
-let channel: RealtimeChannel | null = null
-
 onMounted(async () => {
   await admin.fetchDashboard()
-  if (supabase) {
-    channel = supabase
-      .channel('admin-registros-dashboard')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'registros' },
-        () => {
-          void admin.fetchDashboard()
-        },
-      )
-      .subscribe()
-  }
+  document.addEventListener('visibilitychange', refreshIfVisible)
 })
 
 onUnmounted(() => {
-  if (channel && supabase) {
-    void supabase.removeChannel(channel)
-  }
+  document.removeEventListener('visibilitychange', refreshIfVisible)
 })
+
+function refreshIfVisible() {
+  if (document.visibilityState === 'visible') {
+    void admin.fetchDashboard({ silent: true })
+  }
+}
 
 function displayName(nombre: string | null, email: string): string {
   return nombre?.trim() ? nombre : email
@@ -124,7 +113,7 @@ function confirmCloseSala(salaId: string, nombre: string, count: number) {
         </div>
 
         <p class="tile__count">
-          {{ sala.openRegistros.length }}
+          <span class="tile__count-num">{{ sala.openRegistros.length }}</span>
           {{ sala.openRegistros.length === 1 ? 'persona dentro' : 'personas dentro' }}
         </p>
 
@@ -183,13 +172,17 @@ function confirmCloseSala(salaId: string, nombre: string, count: number) {
 }
 
 .tile {
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
-  padding: 1.1rem 1.25rem;
+  background: rgb(255 255 255 / 0.78);
+  border: 1px solid rgb(255 255 255 / 0.72);
+  border-radius: 1.25rem;
+  padding: 1.15rem 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  box-shadow:
+    0 18px 50px -28px rgb(15 23 42 / 0.38),
+    0 8px 24px -18px rgb(44 67 143 / 0.28);
+  backdrop-filter: blur(16px);
 }
 
 .tile__head {
@@ -202,7 +195,9 @@ function confirmCloseSala(salaId: string, nombre: string, count: number) {
 .tile h3 {
   margin: 0;
   color: var(--color-navy);
-  font-size: 1.1rem;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
 }
 
 .tile__ubic {
@@ -215,6 +210,17 @@ function confirmCloseSala(salaId: string, nombre: string, count: number) {
   margin: 0;
   font-weight: 600;
   font-size: 0.9rem;
+  color: #475569;
+}
+
+.tile__count-num {
+  display: block;
+  color: var(--color-navy);
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  margin-bottom: 0.15rem;
 }
 
 .tile__list {

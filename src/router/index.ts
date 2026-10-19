@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { resolvePostLoginPath } from '../lib/postLogin'
 import { useAuthStore } from '../stores/auth'
 
 const router = createRouter({
@@ -19,6 +20,12 @@ const router = createRouter({
       name: 'auth-callback',
       component: () => import('../views/AuthCallbackView.vue'),
       meta: { layout: 'auth' },
+    },
+    {
+      path: '/inicio',
+      name: 'inicio',
+      component: () => import('../views/InicioView.vue'),
+      meta: { layout: 'app', requiresAuth: true },
     },
     {
       path: '/sala/:id',
@@ -82,21 +89,12 @@ router.beforeEach(async (to) => {
   }
 
   if (needsAdmin && auth.isAuthenticated && !auth.isAdmin) {
-    return {
-      name: 'login',
-      query: {
-        redirect: to.fullPath,
-        admin: '1',
-      },
-    }
+    return { name: 'inicio' }
   }
 
   if (guestOnly && auth.isAuthenticated) {
-    if (typeof to.query.redirect === 'string' && to.query.redirect.startsWith('/')) {
-      return to.query.redirect
-    }
-    if (auth.isAdmin) return '/admin'
-    return true
+    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : null
+    return resolvePostLoginPath(auth.isAdmin, redirect)
   }
 
   return true

@@ -23,15 +23,17 @@ defineProps<{
 
 .admin-page__title {
   margin: 0;
-  font-size: clamp(1.35rem, 3vw, 1.75rem);
+  font-size: clamp(1.45rem, 3vw, 1.9rem);
   color: var(--color-navy);
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: -0.035em;
 }
 
 .admin-page__desc {
   margin: 0;
-  color: var(--color-muted);
+  color: #475569;
   line-height: 1.5;
   width: 100%;
+  max-width: 42rem;
 }
 </style>

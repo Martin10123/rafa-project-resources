@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import Button from 'primevue/button'
@@ -9,6 +9,7 @@ import Message from 'primevue/message'
 import AppLayout from '../layouts/AppLayout.vue'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/auth'
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { Registro, Sala } from '../types'
 
 const route = useRoute()
@@ -22,6 +23,7 @@ const registroAbierto = ref<Registro | null>(null)
 const pageLoading = ref(true)
 const actionLoading = ref(false)
 const pageError = ref<string | null>(null)
+let salaChannel: RealtimeChannel | null = null
 
 const salaId = computed(() => String(route.params.id ?? ''))
 const token = computed(() => String(route.query.t ?? ''))
@@ -72,6 +74,21 @@ async function loadOpenRegistro(sid: string) {
   }
 }
 
+function listenSala(sid: string) {
+  if (!supabase || auth.demoMode) return
+  if (salaChannel) void supabase.removeChannel(salaChannel)
+  salaChannel = supabase
+    .channel(`sala-registros-${sid}`)
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'registros', filter: `sala_id=eq.${sid}` },
+      () => {
+        void loadOpenRegistro(sid)
+      },
+    )
+    .subscribe()
+}
+
 async function loadSala() {
   pageLoading.value = true
   pageError.value = null
@@ -114,6 +131,7 @@ async function loadSala() {
 
     sala.value = data as Sala
     await loadOpenRegistro(data.id)
+    listenSala(data.id)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error al cargar la sala'
     pageError.value = message
@@ -228,6 +246,9 @@ async function signOut() {
 
 onMounted(loadSala)
 watch(() => [route.params.id, route.query.t], loadSala)
+onUnmounted(() => {
+  if (salaChannel && supabase) void supabase.removeChannel(salaChannel)
+})
 </script>
 
 <template>
@@ -314,7 +335,9 @@ watch(() => [route.params.id, route.query.t], loadSala)
 .sala__head h2 {
   margin: 0.5rem 0 0.35rem;
   color: var(--color-navy);
-  font-size: 1.5rem;
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -0.035em;
 }
 
 .sala__head p {
@@ -331,9 +354,13 @@ watch(() => [route.params.id, route.query.t], loadSala)
 }
 
 .panel {
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.78);
+  border: 1px solid rgb(255 255 255 / 0.72);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 18px 50px -28px rgb(15 23 42 / 0.38),
+    0 8px 24px -18px rgb(44 67 143 / 0.28);
+  backdrop-filter: blur(16px);
   padding: 1.25rem;
   display: flex;
   flex-direction: column;

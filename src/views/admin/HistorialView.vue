@@ -28,17 +28,20 @@ onMounted(async () => {
     { label: 'Todas las salas', value: null },
     ...admin.salasList.map((s) => ({ label: s.nombre, value: s.id })),
   ]
-  await buscar()
+  await buscar(false)
 })
 
-async function buscar() {
+async function buscar(force = true) {
   try {
-    await admin.fetchHistorial({
-      desde: desde.value,
-      hasta: hasta.value,
-      salaId: salaId.value,
-      usuarioQuery: usuarioQuery.value,
-    })
+    await admin.fetchHistorial(
+      {
+        desde: desde.value,
+        hasta: hasta.value,
+        salaId: salaId.value,
+        usuarioQuery: usuarioQuery.value,
+      },
+      { force },
+    )
   } catch (e) {
     toast.add({
       severity: 'error',
@@ -204,9 +207,13 @@ function tipoCierreLabel(t: string | null): string {
   display: grid;
   gap: 1rem;
   grid-template-columns: 1fr;
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.78);
+  border: 1px solid rgb(255 255 255 / 0.72);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 18px 50px -28px rgb(15 23 42 / 0.38),
+    0 8px 24px -18px rgb(44 67 143 / 0.28);
+  backdrop-filter: blur(16px);
   padding: 1.1rem 1.25rem;
   margin-bottom: 1rem;
   width: 100%;

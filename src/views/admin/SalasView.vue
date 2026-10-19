@@ -56,6 +56,10 @@ const selectedSala = computed(() =>
   admin.salasList.find((s) => s.id === selectedSalaId.value) ?? null,
 )
 
+function personasDentro(salaId: string) {
+  return admin.dashboardSalas.find((sala) => sala.id === salaId)?.openRegistros.length ?? 0
+}
+
 function onSalaSelect(event: { data: Sala }) {
   selectedSalaId.value = event.data.id
 }
@@ -63,6 +67,7 @@ function onSalaSelect(event: { data: Sala }) {
 onMounted(async () => {
   try {
     await admin.fetchSalasAndHorarios()
+    await admin.fetchDashboard({ silent: true })
     if (admin.salasList.length && !selectedSalaId.value) {
       selectedSalaId.value = admin.salasList[0].id
       selectedSalaRow.value = admin.salasList[0]
@@ -266,6 +271,14 @@ function downloadQr() {
           <Column selection-mode="single" header-style="width: 3rem" />
           <Column field="nombre" header="Nombre" />
           <Column field="ubicacion" header="Ubicación" />
+          <Column header="Ocupación">
+            <template #body="{ data }">
+              <Tag
+                :value="personasDentro(data.id) ? `${personasDentro(data.id)} dentro` : 'Disponible'"
+                :severity="personasDentro(data.id) ? 'warn' : 'success'"
+              />
+            </template>
+          </Column>
           <Column header="Estado">
             <template #body="{ data }">
               <Tag :value="data.activa ? 'Activa' : 'Inactiva'" :severity="data.activa ? 'success' : 'secondary'" />
@@ -421,9 +434,13 @@ function downloadQr() {
 }
 
 .panel {
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.78);
+  border: 1px solid rgb(255 255 255 / 0.72);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 18px 50px -28px rgb(15 23 42 / 0.38),
+    0 8px 24px -18px rgb(44 67 143 / 0.28);
+  backdrop-filter: blur(16px);
   padding: 1rem 1.1rem;
   min-width: 0;
 }

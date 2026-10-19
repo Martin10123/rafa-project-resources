@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { Horario, Perfil, Registro, Sala, TipoCierre } from '../types'
 
 export interface OpenRegistroRow {
@@ -203,11 +204,81 @@ export const useAdminStore = defineStore('admin', () => {
   const margenGraciaMinutos = ref(15)
   const auditoriaRows = ref<AuditoriaRow[]>([])
 
-  async function fetchDashboard() {
-    loading.value = true
+  const CACHE_TTL_MS = 3 * 60 * 1000
+  const fetchedAt = {
+    dashboard: 0,
+    salas: 0,
+    config: 0,
+    auditoria: 0,
+    perfiles: 0,
+  }
+  let historialSource: HistorialRow[] = []
+  let historialSourceKey = ''
+  let historialFetchedAt = 0
+
+  function cacheFresh(at: number) {
+    return at > 0 && Date.now() - at < CACHE_TTL_MS
+  }
+
+  function invalidateDerived() {
+    historialFetchedAt = 0
+    fetchedAt.auditoria = 0
+    fetchedAt.dashboard = 0
+  }
+
+  function historialQueryKey(filters: {
+    desde: Date | null
+    hasta: Date | null
+    salaId: string | null
+  }) {
+    return JSON.stringify({
+      desde: filters.desde ? startOfDayIso(filters.desde) : null,
+      hasta: filters.hasta ? endOfDayIso(filters.hasta) : null,
+      salaId: filters.salaId,
+    })
+  }
+
+  let occupancyChannel: RealtimeChannel | null = null
+  let occupancyTimer: ReturnType<typeof setTimeout> | null = null
+
+  function scheduleOccupancyRefresh() {
+    if (occupancyTimer) clearTimeout(occupancyTimer)
+    occupancyTimer = setTimeout(() => {
+      occupancyTimer = null
+      historialFetchedAt = 0
+      void fetchDashboard({ silent: true })
+    }, 200)
+  }
+
+  function startOccupancyWatch() {
+    if (!supabase || occupancyChannel) return
+    occupancyChannel = supabase
+      .channel('admin-registros-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'registros' },
+        () => {
+          scheduleOccupancyRefresh()
+        },
+      )
+      .subscribe()
+  }
+
+  function stopOccupancyWatch() {
+    if (occupancyTimer) clearTimeout(occupancyTimer)
+    occupancyTimer = null
+    if (occupancyChannel && supabase) {
+      void supabase.removeChannel(occupancyChannel)
+      occupancyChannel = null
+    }
+  }
+
+  async function fetchDashboard(options?: { silent?: boolean }) {
+    if (!options?.silent) loading.value = true
     try {
       if (demoMode.value) {
         dashboardSalas.value = buildSalaEstado(mock.salas, mock.registros, mock.perfiles)
+        fetchedAt.dashboard = Date.now()
         return
       }
       const client = supabase!
@@ -238,19 +309,21 @@ export const useAdminStore = defineStore('admin', () => {
         ...(sala as Sala),
         openRegistros: openBySala.get(sala.id) ?? [],
       }))
+      fetchedAt.dashboard = Date.now()
     } finally {
       loading.value = false
     }
   }
 
   async function closeRegistro(registroId: string) {
+    invalidateDerived()
     const salida = new Date().toISOString()
     if (demoMode.value) {
       const r = mock.registros.find((x) => x.id === registroId)
       if (!r || r.salida) return
       r.salida = salida
       r.tipo_cierre = 'admin'
-      await fetchDashboard()
+      await fetchDashboard({ silent: true })
       return
     }
     const { error } = await supabase!
@@ -259,10 +332,11 @@ export const useAdminStore = defineStore('admin', () => {
       .eq('id', registroId)
       .is('salida', null)
     if (error) throw error
-    await fetchDashboard()
+    await fetchDashboard({ silent: true })
   }
 
   async function closeAllInSala(salaId: string) {
+    invalidateDerived()
     const salida = new Date().toISOString()
     if (demoMode.value) {
       for (const r of mock.registros) {
@@ -271,7 +345,7 @@ export const useAdminStore = defineStore('admin', () => {
           r.tipo_cierre = 'admin'
         }
       }
-      await fetchDashboard()
+      await fetchDashboard({ silent: true })
       return
     }
     const { error } = await supabase!
@@ -280,21 +354,30 @@ export const useAdminStore = defineStore('admin', () => {
       .eq('sala_id', salaId)
       .is('salida', null)
     if (error) throw error
-    await fetchDashboard()
+    await fetchDashboard({ silent: true })
   }
 
-  async function fetchHistorial(filters: {
-    desde: Date | null
-    hasta: Date | null
-    salaId: string | null
-    usuarioQuery: string
-  }) {
+  async function fetchHistorial(
+    filters: {
+      desde: Date | null
+      hasta: Date | null
+      salaId: string | null
+      usuarioQuery: string
+    },
+    options?: { force?: boolean },
+  ) {
+    const key = historialQueryKey(filters)
+    if (!options?.force && key === historialSourceKey && cacheFresh(historialFetchedAt)) {
+      historialRows.value = applyHistorialFilters(historialSource, filters)
+      return
+    }
     loading.value = true
     try {
       if (demoMode.value) {
-        let rows = buildHistorialRows(mock.registros, mock.salas, mock.perfiles)
-        rows = applyHistorialFilters(rows, filters)
-        historialRows.value = rows
+        historialSource = buildHistorialRows(mock.registros, mock.salas, mock.perfiles)
+        historialSourceKey = key
+        historialFetchedAt = Date.now()
+        historialRows.value = applyHistorialFilters(historialSource, filters)
         return
       }
       let query = supabase!
@@ -306,7 +389,7 @@ export const useAdminStore = defineStore('admin', () => {
       if (filters.hasta) query = query.lte('entrada', endOfDayIso(filters.hasta))
       const { data, error } = await query
       if (error) throw error
-      let rows: HistorialRow[] = (data ?? []).map((row) => {
+      historialSource = (data ?? []).map((row) => {
         const sala = row.salas as { nombre: string } | null
         const perfil = row.perfiles as { email: string; nombre: string | null } | null
         const { salas: _s, perfiles: _p, ...reg } = row
@@ -317,19 +400,22 @@ export const useAdminStore = defineStore('admin', () => {
           usuario_nombre: perfil?.nombre ?? null,
         }
       })
-      rows = applyHistorialFilters(rows, filters)
-      historialRows.value = rows
+      historialSourceKey = key
+      historialFetchedAt = Date.now()
+      historialRows.value = applyHistorialFilters(historialSource, filters)
     } finally {
       loading.value = false
     }
   }
 
-  async function fetchSalasAndHorarios() {
+  async function fetchSalasAndHorarios(options?: { force?: boolean }) {
+    if (!options?.force && cacheFresh(fetchedAt.salas)) return
     loading.value = true
     try {
       if (demoMode.value) {
         salasList.value = [...mock.salas]
         horariosList.value = [...mock.horarios]
+        fetchedAt.salas = Date.now()
         return
       }
       const [{ data: salas, error: e1 }, { data: horarios, error: e2 }] = await Promise.all([
@@ -340,6 +426,7 @@ export const useAdminStore = defineStore('admin', () => {
       if (e2) throw e2
       salasList.value = (salas ?? []) as Sala[]
       horariosList.value = (horarios ?? []) as Horario[]
+      fetchedAt.salas = Date.now()
     } finally {
       loading.value = false
     }
@@ -351,6 +438,8 @@ export const useAdminStore = defineStore('admin', () => {
     ubicacion: string | null
     activa: boolean
   }) {
+    invalidateDerived()
+    fetchedAt.salas = 0
     if (demoMode.value) {
       if (payload.id) {
         const s = mock.salas.find((x) => x.id === payload.id)
@@ -368,7 +457,7 @@ export const useAdminStore = defineStore('admin', () => {
           activa: payload.activa,
         })
       }
-      await fetchSalasAndHorarios()
+      await fetchSalasAndHorarios({ force: true })
       return
     }
     if (payload.id) {
@@ -390,20 +479,22 @@ export const useAdminStore = defineStore('admin', () => {
       })
       if (error) throw error
     }
-    await fetchSalasAndHorarios()
+    await fetchSalasAndHorarios({ force: true })
   }
 
   async function rotateSalaToken(salaId: string) {
+    invalidateDerived()
+    fetchedAt.salas = 0
     const token = newToken()
     if (demoMode.value) {
       const s = mock.salas.find((x) => x.id === salaId)
       if (s) s.token_qr = token
-      await fetchSalasAndHorarios()
+      await fetchSalasAndHorarios({ force: true })
       return token
     }
     const { error } = await supabase!.from('salas').update({ token_qr: token }).eq('id', salaId)
     if (error) throw error
-    await fetchSalasAndHorarios()
+    await fetchSalasAndHorarios({ force: true })
     return token
   }
 
@@ -414,6 +505,8 @@ export const useAdminStore = defineStore('admin', () => {
     hora_inicio: string
     hora_fin: string
   }) {
+    invalidateDerived()
+    fetchedAt.salas = 0
     if (demoMode.value) {
       if (payload.id) {
         const h = mock.horarios.find((x) => x.id === payload.id)
@@ -421,7 +514,7 @@ export const useAdminStore = defineStore('admin', () => {
       } else {
         mock.horarios.push({ ...payload, id: crypto.randomUUID() })
       }
-      await fetchSalasAndHorarios()
+      await fetchSalasAndHorarios({ force: true })
       return
     }
     if (payload.id) {
@@ -433,23 +526,27 @@ export const useAdminStore = defineStore('admin', () => {
       const { error } = await supabase!.from('horarios').insert(insert)
       if (error) throw error
     }
-    await fetchSalasAndHorarios()
+    await fetchSalasAndHorarios({ force: true })
   }
 
   async function deleteHorario(horarioId: string) {
+    invalidateDerived()
+    fetchedAt.salas = 0
     if (demoMode.value) {
       mock.horarios = mock.horarios.filter((h) => h.id !== horarioId)
-      await fetchSalasAndHorarios()
+      await fetchSalasAndHorarios({ force: true })
       return
     }
     const { error } = await supabase!.from('horarios').delete().eq('id', horarioId)
     if (error) throw error
-    await fetchSalasAndHorarios()
+    await fetchSalasAndHorarios({ force: true })
   }
 
-  async function fetchConfig() {
+  async function fetchConfig(options?: { force?: boolean }) {
+    if (!options?.force && cacheFresh(fetchedAt.config)) return
     if (demoMode.value) {
       margenGraciaMinutos.value = mock.margenGracia
+      fetchedAt.config = Date.now()
       return
     }
     const { data, error } = await supabase!
@@ -460,12 +557,15 @@ export const useAdminStore = defineStore('admin', () => {
     if (error) throw error
     const n = parseInt(data?.valor ?? '15', 10)
     margenGraciaMinutos.value = Number.isFinite(n) ? n : 15
+    fetchedAt.config = Date.now()
   }
 
   async function saveMargenGracia(minutos: number) {
+    fetchedAt.auditoria = 0
     if (demoMode.value) {
       mock.margenGracia = minutos
       margenGraciaMinutos.value = minutos
+      fetchedAt.config = Date.now()
       return
     }
     const { error } = await supabase!
@@ -474,15 +574,18 @@ export const useAdminStore = defineStore('admin', () => {
       .eq('clave', 'margen_gracia_minutos')
     if (error) throw error
     margenGraciaMinutos.value = minutos
+    fetchedAt.config = Date.now()
   }
 
-  async function fetchAuditoria() {
+  async function fetchAuditoria(options?: { force?: boolean }) {
+    if (!options?.force && cacheFresh(fetchedAt.auditoria)) return
     loading.value = true
     try {
       if (demoMode.value) {
         auditoriaRows.value = [...mock.auditoria].sort((a, b) =>
           b.ocurrido_en.localeCompare(a.ocurrido_en),
         )
+        fetchedAt.auditoria = Date.now()
         return
       }
       const { data, error } = await supabase!
@@ -491,19 +594,23 @@ export const useAdminStore = defineStore('admin', () => {
         .order('ocurrido_en', { ascending: false })
       if (error) throw error
       auditoriaRows.value = (data ?? []) as AuditoriaRow[]
+      fetchedAt.auditoria = Date.now()
     } finally {
       loading.value = false
     }
   }
 
-  async function fetchPerfilesForFilter() {
+  async function fetchPerfilesForFilter(options?: { force?: boolean }) {
+    if (!options?.force && cacheFresh(fetchedAt.perfiles)) return
     if (demoMode.value) {
       perfilesList.value = [...mock.perfiles]
+      fetchedAt.perfiles = Date.now()
       return
     }
     const { data, error } = await supabase!.from('perfiles').select('id, email, nombre').order('email')
     if (error) throw error
     perfilesList.value = (data ?? []) as Perfil[]
+    fetchedAt.perfiles = Date.now()
   }
 
   function resetMockDemo() {
@@ -521,6 +628,8 @@ export const useAdminStore = defineStore('admin', () => {
     margenGraciaMinutos,
     auditoriaRows,
     fetchDashboard,
+    startOccupancyWatch,
+    stopOccupancyWatch,
     closeRegistro,
     closeAllInSala,
     fetchHistorial,

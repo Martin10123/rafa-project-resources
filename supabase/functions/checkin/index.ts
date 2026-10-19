@@ -10,6 +10,7 @@ const corsHeaders = {
 
 /** Dominio permitido (debe coincidir con trigger en perfiles). */
 const ALLOWED_EMAIL_DOMAIN = Deno.env.get('ALLOWED_EMAIL_DOMAIN') ?? 'tecnocomfenalco.edu.co'
+const RAFA_ADMIN_EMAIL = 'aux.audiovisual6@tecnologicocomfenalco.edu.co'
 
 /** Upstash Redis REST (opcional — stub si faltan claves). */
 const UPSTASH_REDIS_REST_URL = Deno.env.get('UPSTASH_REDIS_REST_URL')
@@ -101,9 +102,9 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: 'JWT inválido o expirado' }, 401)
   }
 
-  const email = userData.user.email ?? ''
+  const email = (userData.user.email ?? '').toLowerCase()
   const domain = emailDomain(email)
-  if (domain !== ALLOWED_EMAIL_DOMAIN.toLowerCase()) {
+  if (email !== RAFA_ADMIN_EMAIL && domain !== ALLOWED_EMAIL_DOMAIN.toLowerCase()) {
     return jsonResponse({ error: `Solo correos @${ALLOWED_EMAIL_DOMAIN}` }, 403)
   }
 

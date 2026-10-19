@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import ProgressSpinner from 'primevue/progressspinner'
+import { resolvePostLoginPath } from '../lib/postLogin'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/auth'
 
@@ -12,24 +13,9 @@ const toast = useToast()
 const auth = useAuthStore()
 const status = ref('Confirmando cuenta…')
 
-async function resolvePostLoginPath(): Promise<string> {
+function postLoginPath() {
   const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
-  if (redirect?.startsWith('/')) return redirect
-  if (auth.isAdmin) return '/admin'
-  if (!supabase) return '/login'
-
-  const { data } = await supabase
-    .from('salas')
-    .select('id, token_qr')
-    .eq('activa', true)
-    .order('nombre')
-    .limit(1)
-    .maybeSingle()
-
-  if (data?.id && data.token_qr) {
-    return `/sala/${data.id}?t=${encodeURIComponent(data.token_qr)}`
-  }
-  return '/admin'
+  return resolvePostLoginPath(auth.isAdmin, redirect)
 }
 
 onMounted(async () => {
@@ -93,7 +79,7 @@ onMounted(async () => {
     }
 
     status.value = 'Cuenta confirmada. Redirigiendo…'
-    await router.replace(await resolvePostLoginPath())
+    await router.replace(postLoginPath())
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Error al confirmar el enlace'
     const friendly = /PKCE|code verifier/i.test(message)
@@ -106,22 +92,14 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="callback">
-    <ProgressSpinner style="width: 3rem; height: 3rem" stroke-width="4" />
-    <p>{{ status }}</p>
+  <div class="relative flex min-h-svh flex-col items-center justify-center gap-4 bg-[#e7eef8] px-6 font-display text-navy">
+    <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      <div class="absolute top-0 right-0 h-72 w-72 rounded-full bg-navy/15 blur-3xl" />
+      <div class="absolute bottom-0 left-0 h-64 w-64 rounded-full bg-brand-red/10 blur-3xl" />
+    </div>
+    <div class="glass-panel relative z-10 flex w-full max-w-sm flex-col items-center gap-4 px-6 py-8 text-center">
+      <ProgressSpinner style="width: 3rem; height: 3rem" stroke-width="4" />
+      <p class="m-0 text-base font-semibold tracking-tight">{{ status }}</p>
+    </div>
   </div>
 </template>
-
-<style scoped>
-.callback {
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  background: #eef0f4;
-  color: #1a2744;
-  font-weight: 600;
-}
-</style>

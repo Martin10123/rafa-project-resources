@@ -40,8 +40,9 @@ El archivo `vercel.json` ya define build con pnpm y rewrites SPA para Vue Router
 | Ruta | Uso |
 |------|-----|
 | `/login` | Usuario/correo + contraseña (confirmación por correo solo al registrarse) |
-| `/sala/:id?t=TOKEN` | Check-in / check-out |
-| `/admin` | Panel (solo 2 admins) |
+| `/inicio` | Usuario normal: espera e instrucciones para escanear QR |
+| `/sala/:id?t=TOKEN` | Check-in / check-out (solo vía QR de la puerta) |
+| `/admin` | Panel (solo admins) |
 
 ## Base de datos
 

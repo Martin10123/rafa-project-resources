@@ -3,92 +3,34 @@ import { RouterLink } from 'vue-router'
 </script>
 
 <template>
-  <div class="shell">
-    <header class="topbar">
-      <div class="topbar__inner">
-        <RouterLink to="/login" class="brand">
-          <span class="brand__mark" aria-hidden="true" />
-          <span class="brand__text">
-            <span class="brand__name">Tecnológico Comfenalco</span>
-            <span class="brand__app">Check-in Salas</span>
+  <div class="relative flex min-h-svh flex-col bg-[#e7eef8] font-display text-slate-800 antialiased">
+    <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      <div class="absolute -top-20 right-0 h-72 w-72 rounded-full bg-navy/15 blur-3xl" />
+      <div class="absolute bottom-0 left-0 h-64 w-64 rounded-full bg-brand-red/10 blur-3xl" />
+      <div
+        class="absolute inset-0 opacity-70 [background-image:radial-gradient(rgba(44,67,143,0.14)_1px,transparent_1px)] [background-size:22px_22px]"
+      />
+    </div>
+
+    <header class="relative z-10 border-b border-white/10 bg-[#142454]/88 text-white backdrop-blur-xl">
+      <div class="flex items-center px-4 py-3.5 sm:px-6">
+        <RouterLink to="/inicio" class="flex min-w-0 items-center gap-3 text-inherit no-underline">
+          <span
+            class="inline-block size-10 shrink-0 rounded-full bg-[radial-gradient(circle_at_35%_35%,#fff_0_28%,transparent_29%),conic-gradient(from_200deg,#dc3545,#c5d0e0,#fff,#dc3545)] shadow-[0_0_0_4px_rgba(255,255,255,0.12)]"
+            aria-hidden="true"
+          />
+          <span class="flex min-w-0 flex-col leading-tight">
+            <span class="truncate text-[0.68rem] font-semibold tracking-[0.16em] text-white/75 uppercase">
+              Tecnológico Comfenalco
+            </span>
+            <span class="truncate text-lg font-extrabold tracking-tight">Check-in Salas</span>
           </span>
         </RouterLink>
       </div>
     </header>
-    <main class="main">
+
+    <main class="relative z-10 flex-1 px-4 py-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6">
       <slot />
     </main>
   </div>
 </template>
-
-<style scoped>
-.shell {
-  min-height: 100svh;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--color-surface);
-}
-
-.topbar {
-  width: 100%;
-  background: var(--color-navy);
-  color: #fff;
-}
-
-.topbar__inner {
-  width: 100%;
-  padding: 0.85rem var(--space-page);
-  display: flex;
-  align-items: center;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  text-decoration: none;
-  color: inherit;
-  min-width: 0;
-}
-
-.brand__mark {
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #fff 0 28%, transparent 29%),
-    conic-gradient(from 200deg, var(--color-red), var(--color-navy-light), var(--color-navy), var(--color-red));
-  flex-shrink: 0;
-}
-
-.brand__text {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.2;
-  min-width: 0;
-}
-
-.brand__name {
-  font-size: clamp(0.62rem, 2.2vw, 0.72rem);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  opacity: 0.85;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.brand__app {
-  font-size: clamp(0.95rem, 3vw, 1.1rem);
-  font-weight: 700;
-}
-
-.main {
-  flex: 1;
-  width: 100%;
-  padding: var(--space-page);
-  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
-  box-sizing: border-box;
-}
-</style>

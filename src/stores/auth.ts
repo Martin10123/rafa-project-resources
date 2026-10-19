@@ -5,6 +5,11 @@ import type { Perfil } from '../types'
 
 export const ALLOWED_EMAIL_DOMAIN = 'tecnocomfenalco.edu.co'
 
+/** Correo de Rafa. Se acepta además del dominio institucional. */
+export const RAFA_ADMIN_EMAIL = 'aux.audiovisual6@tecnologicocomfenalco.edu.co'
+
+const EXTRA_ALLOWED_EMAILS = new Set([RAFA_ADMIN_EMAIL])
+
 const DEMO_SESSION_STORAGE_KEY = 'educative-resources-demo-auth'
 const MIN_PASSWORD_LENGTH = 8
 
@@ -12,6 +17,7 @@ type DemoSessionStored = { email: string; nombre: string | null }
 
 export function isAllowedEmail(raw: string): boolean {
   const normalized = raw.trim().toLowerCase()
+  if (EXTRA_ALLOWED_EMAILS.has(normalized)) return true
   const at = normalized.lastIndexOf('@')
   if (at <= 0) return false
   return normalized.slice(at + 1) === ALLOWED_EMAIL_DOMAIN

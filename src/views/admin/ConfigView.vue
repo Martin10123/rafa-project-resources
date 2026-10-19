@@ -95,9 +95,13 @@ async function guardar() {
 }
 
 .config {
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
+  background: rgb(255 255 255 / 0.78);
+  border: 1px solid rgb(255 255 255 / 0.72);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 18px 50px -28px rgb(15 23 42 / 0.38),
+    0 8px 24px -18px rgb(44 67 143 / 0.28);
+  backdrop-filter: blur(16px);
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
