@@ -1,5 +1,31 @@
-# Vue 3 + TypeScript + Vite
+# Check-in Salas — Tecnológico Comfenalco
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Aplicación web (Vue 3 + Vite + PrimeVue) para check-in / check-out de salas de sistemas.
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## Desarrollo
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Copia `.env.example` a `.env` y completa las claves de Supabase cuando las tengas.
+
+## Stack
+
+- Vue 3 + TypeScript + Vite
+- PrimeVue 4 (MIT, tema institucional Comfenalco; sin licencia PrimeUI)
+- Pinia + Vue Router
+- Supabase (Auth email+password, Postgres, RLS, Realtime)
+
+## Rutas
+
+| Ruta | Uso |
+|------|-----|
+| `/login` | Usuario/correo + contraseña (confirmación por correo solo al registrarse) |
+| `/sala/:id?t=TOKEN` | Check-in / check-out |
+| `/admin` | Panel (solo 2 admins) |
+
+## Base de datos
+
+Migración MVP: `supabase/migrations/20260319120000_mvp_schema.sql`

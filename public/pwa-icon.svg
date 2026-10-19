@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Check-in Salas">
+  <rect width="512" height="512" fill="#ffffff"/>
+  <rect x="48" y="48" width="416" height="416" rx="64" fill="#2c438f"/>
+  <path fill="#ffffff" d="M148 168h216v32H148zm0 72h216v32H148zm0 72h144v32H148z"/>
+  <circle cx="360" cy="312" r="36" fill="#47bfff"/>
+</svg>
