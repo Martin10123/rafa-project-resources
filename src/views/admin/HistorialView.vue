@@ -148,7 +148,7 @@ function tipoCierreLabel(t: string | null): string {
         <InputText id="hist-usuario" v-model="usuarioQuery" fluid placeholder="Buscar…" />
       </div>
       <div class="filters__actions">
-        <Button label="Buscar" icon="pi pi-search" @click="buscar" />
+        <Button label="Buscar" icon="pi pi-search" @click="buscar(true)" />
         <Button label="Limpiar" icon="pi pi-filter-slash" outlined severity="secondary" @click="limpiarFiltros" />
         <Button
           label="Exportar CSV"
