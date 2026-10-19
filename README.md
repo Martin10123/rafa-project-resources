@@ -9,7 +9,24 @@ pnpm install
 pnpm dev
 ```
 
-Copia `.env.example` a `.env` y completa las claves de Supabase cuando las tengas.
+Copia `.env.example` a `.env.local` y completa las claves de Supabase.
+
+## Deploy en Vercel
+
+1. Conecta el repo en Vercel (framework **Vite**, output `dist`).
+2. Configura variables de entorno (Production + Preview):
+
+| Variable | Descripción |
+|----------|-------------|
+| `VITE_SUPABASE_URL` | URL del proyecto Supabase |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Clave publishable / anon |
+| `VITE_APP_URL` | URL pública de Vercel (p. ej. `https://tu-app.vercel.app`) |
+
+3. En Supabase → **Authentication → URL Configuration**:
+   - **Site URL**: la misma `VITE_APP_URL`
+   - **Redirect URLs**: `https://tu-app.vercel.app/auth/callback` (y la de preview si aplica)
+
+El archivo `vercel.json` ya define build con pnpm y rewrites SPA para Vue Router.
 
 ## Stack
 
