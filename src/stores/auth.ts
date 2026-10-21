@@ -92,6 +92,32 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => Boolean(userId.value))
   const usesSupabase = computed(() => isSupabaseConfigured)
   let ultimoMarcado = 0
+  /** Sube en cada login o salida para ignorar cargas que terminan tarde. */
+  let generacion = 0
+  /** Tras Salir, un refresh o otra pestaña no puede volver a abrir la sesión. */
+  let sesionCerrada = false
+
+  function sesionVigente(epoch: number) {
+    return epoch === generacion && !sesionCerrada
+  }
+
+  function aceptarNuevaSesion() {
+    generacion += 1
+    sesionCerrada = false
+  }
+
+  function borrarTokenSupabase() {
+    try {
+      const keys: string[] = []
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i)
+        if (key?.startsWith('sb-') && key.includes('auth-token')) keys.push(key)
+      }
+      for (const key of keys) localStorage.removeItem(key)
+    } catch {
+      /* modo privado */
+    }
+  }
 
   function registrarActividad() {
     if (!userId.value || demoMode.value) return
@@ -185,8 +211,8 @@ export const useAuthStore = defineStore('auth', () => {
     persistDemoSession()
   }
 
-  async function loadPerfilAndAdmin(uid: string) {
-    if (!supabase) return
+  async function loadPerfilAndAdmin(uid: string, epoch: number) {
+    if (!supabase || !sesionVigente(epoch)) return
 
     const { data: perfilData, error: perfilError } = await supabase
       .from('perfiles')
@@ -194,6 +220,7 @@ export const useAuthStore = defineStore('auth', () => {
       .eq('id', uid)
       .maybeSingle()
 
+    if (!sesionVigente(epoch)) return
     if (perfilError) throw perfilError
     perfil.value = (perfilData as Perfil | null) ?? null
 
@@ -207,6 +234,7 @@ export const useAuthStore = defineStore('auth', () => {
       .eq('user_id', uid)
       .maybeSingle()
 
+    if (!sesionVigente(epoch)) return
     if (!superError && superRow) {
       nextSuperadmin = true
       nextAdmin = true
@@ -218,6 +246,7 @@ export const useAuthStore = defineStore('auth', () => {
       .eq('user_id', uid)
       .maybeSingle()
 
+    if (!sesionVigente(epoch)) return
     if (!adminError && adminRow) {
       nextAdmin = true
     } else if (!nextAdmin) {
@@ -225,6 +254,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (!rpcError && rpcAdmin === true) nextAdmin = true
     }
 
+    if (!sesionVigente(epoch)) return
     if (!nextAdmin) {
       const { data: jefaRow, error: jefaError } = await supabase
         .from('jefas')
@@ -236,20 +266,30 @@ export const useAuthStore = defineStore('auth', () => {
         nextJefa = true
       } else {
         const { data: rpcJefa, error: rpcJefaError } = await supabase.rpc('is_jefa')
+        if (!sesionVigente(epoch)) return
         if (!rpcJefaError && rpcJefa === true) nextJefa = true
       }
     }
 
+    if (!sesionVigente(epoch)) return
     isSuperadmin.value = nextSuperadmin
     isAdmin.value = nextAdmin
     isJefa.value = nextJefa
   }
 
   async function applySupabaseUser(uid: string, userEmail: string | undefined) {
+    const epoch = generacion
+    if (!sesionVigente(epoch)) return
+    try {
+      await loadPerfilAndAdmin(uid, epoch)
+    } catch (error) {
+      if (!sesionVigente(epoch)) return
+      throw error
+    }
+    if (!sesionVigente(epoch)) return
     userId.value = uid
     email.value = userEmail?.toLowerCase() ?? null
     demoMode.value = false
-    await loadPerfilAndAdmin(uid)
   }
 
   let listening = false
@@ -261,13 +301,7 @@ export const useAuthStore = defineStore('auth', () => {
     } = await supabase.auth.getSession()
     if (session?.user) {
       if (sesionInactiva(session.user.last_sign_in_at)) {
-        limpiarActividad()
-        try {
-          await supabase.auth.signOut({ scope: 'local' })
-        } catch {
-          /* la sesión local se descarta igual */
-        }
-        clearSession()
+        await signOut()
         return
       }
       await applySupabaseUser(session.user.id, session.user.email)
@@ -290,12 +324,23 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (!listening) {
       listening = true
-      supabase.auth.onAuthStateChange(async (_event, nextSession) => {
-        if (nextSession?.user) {
-          await applySupabaseUser(nextSession.user.id, nextSession.user.email)
-        } else if (!demoMode.value) {
-          clearSession()
+      supabase.auth.onAuthStateChange((event, nextSession) => {
+        const epoch = generacion
+        if (!sesionVigente(epoch)) {
+          if (nextSession?.user) borrarTokenSupabase()
+          return
         }
+        if (event === 'TOKEN_REFRESHED') return
+        const uid = nextSession?.user?.id
+        const mail = nextSession?.user?.email
+        if (!uid) {
+          if (!demoMode.value) clearSession()
+          return
+        }
+        queueMicrotask(() => {
+          if (!sesionVigente(epoch)) return
+          void applySupabaseUser(uid, mail)
+        })
       })
     }
 
@@ -318,10 +363,16 @@ export const useAuthStore = defineStore('auth', () => {
       return { ok: true }
     }
 
+    aceptarNuevaSesion()
+    const epoch = generacion
     const { data, error } = await supabase.auth.signInWithPassword({
       email: resolved.email,
       password,
     })
+    if (!sesionVigente(epoch)) {
+      if (sesionCerrada) borrarTokenSupabase()
+      return { ok: false, message: 'Vuelve a intentar.' }
+    }
 
     if (error) {
       return { ok: false, message: mapAuthError(error.message) }
@@ -371,6 +422,7 @@ export const useAuthStore = defineStore('auth', () => {
       return { ok: true, needsEmailConfirmation: false }
     }
 
+    aceptarNuevaSesion()
     const { data, error } = await supabase.auth.signUp({
       email: resolved.email,
       password,
@@ -468,6 +520,7 @@ export const useAuthStore = defineStore('auth', () => {
     const accessToken = hashParams.get('access_token')
     const refreshToken = hashParams.get('refresh_token')
     if (accessToken && refreshToken) {
+      aceptarNuevaSesion()
       const { data, error } = await supabase.auth.setSession({
         access_token: accessToken,
         refresh_token: refreshToken,
@@ -492,6 +545,7 @@ export const useAuthStore = defineStore('auth', () => {
         : 'email'
 
     if (token && parsed.pathname.includes('/verify')) {
+      aceptarNuevaSesion()
       const { data, error } = await supabase.auth.verifyOtp({
         token_hash: token,
         type: type as 'email' | 'magiclink' | 'signup' | 'recovery',
@@ -508,6 +562,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
 
     if (token) {
+      aceptarNuevaSesion()
       const { data, error } = await supabase.auth.verifyOtp({
         token_hash: token,
         type: type as 'email' | 'magiclink' | 'signup' | 'recovery',
@@ -588,16 +643,22 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function signOut() {
-    if (supabase && !demoMode.value) {
-      try {
-        await supabase.auth.signOut({ scope: 'local' })
-      } catch {
-        // Igual limpiamos sesión local
-      }
-    }
+    const epoch = ++generacion
+    const eraDemo = demoMode.value
+    sesionCerrada = true
     clearSession()
     limpiarActividad()
     ultimoMarcado = 0
+    borrarTokenSupabase()
+    if (!supabase || eraDemo) return
+    void supabase.auth.signOut({ scope: 'local' }).then(
+      () => {
+        if (epoch === generacion) borrarTokenSupabase()
+      },
+      () => {
+        if (epoch === generacion) borrarTokenSupabase()
+      },
+    )
   }
 
   return {
