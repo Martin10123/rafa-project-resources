@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { DEMO_SEDES, isSedeUuid, loadSedes } from '../lib/sedes'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import type { Horario, Perfil, Registro, Sala, TipoCierre } from '../types'
+import type { Horario, Perfil, Registro, Sala, Sede, TipoCierre } from '../types'
 
 export interface OpenRegistroRow {
   id: string
@@ -19,8 +20,12 @@ export interface SalaEstado extends Sala {
 
 export interface HistorialRow extends Registro {
   sala_nombre: string
+  sede_id: string | null
+  sede_nombre: string
   usuario_email: string
   usuario_nombre: string | null
+  cerrado_por_nombre: string | null
+  cerrado_por_email: string | null
 }
 
 export interface AuditoriaRow {
@@ -71,6 +76,7 @@ function createMockState() {
       ubicacion: 'Bloque 2 — Piso 3',
       token_qr: 'demo-token-sala-a',
       activa: true,
+      sede_id: DEMO_SEDES[0].id,
     },
     {
       id: MOCK_SALA_2,
@@ -78,6 +84,7 @@ function createMockState() {
       ubicacion: 'Bloque 2 — Piso 3',
       token_qr: 'demo-token-sala-b',
       activa: true,
+      sede_id: DEMO_SEDES[1].id,
     },
   ]
   const perfiles: Perfil[] = [
@@ -85,11 +92,13 @@ function createMockState() {
       id: MOCK_USER_1,
       email: 'estudiante1@tecnocomfenalco.edu.co',
       nombre: 'Ana García',
+      sede_id: DEMO_SEDES[0].id,
     },
     {
       id: MOCK_USER_2,
       email: 'estudiante2@tecnocomfenalco.edu.co',
       nombre: 'Luis Pérez',
+      sede_id: DEMO_SEDES[1].id,
     },
   ]
   const horarios: Horario[] = [
@@ -177,17 +186,25 @@ function buildHistorialRows(
   registros: Registro[],
   salas: Sala[],
   perfiles: Perfil[],
+  sedes: Sede[],
 ): HistorialRow[] {
-  const sm = new Map(salas.map((s) => [s.id, s.nombre]))
+  const sm = new Map(salas.map((s) => [s.id, s]))
   const pm = perfilMap(perfiles)
+  const sedeName = new Map(sedes.map((s) => [s.id, s.nombre]))
   return registros
     .map((r) => {
+      const sala = sm.get(r.sala_id)
       const p = pm.get(r.usuario_id)
+      const cerrador = r.cerrado_por ? pm.get(r.cerrado_por) : undefined
       return {
         ...r,
-        sala_nombre: sm.get(r.sala_id) ?? '—',
+        sala_nombre: sala?.nombre ?? '—',
+        sede_id: sala?.sede_id ?? null,
+        sede_nombre: sala?.sede_id ? (sedeName.get(sala.sede_id) ?? 'Sin sede') : 'Sin sede',
         usuario_email: p?.email ?? '—',
         usuario_nombre: p?.nombre ?? null,
+        cerrado_por_nombre: cerrador?.nombre ?? null,
+        cerrado_por_email: cerrador?.email ?? null,
       }
     })
     .sort((a, b) => b.entrada.localeCompare(a.entrada))
@@ -198,11 +215,16 @@ export const useAdminStore = defineStore('admin', () => {
   const loading = ref(false)
   const dashboardSalas = ref<SalaEstado[]>([])
   const historialRows = ref<HistorialRow[]>([])
+  const historialTotal = ref(0)
+  const historialMs = ref<number | null>(null)
   const salasList = ref<Sala[]>([])
+  const sedesList = ref<Sede[]>([])
   const horariosList = ref<Horario[]>([])
   const perfilesList = ref<Perfil[]>([])
   const margenGraciaMinutos = ref(15)
   const auditoriaRows = ref<AuditoriaRow[]>([])
+  const auditoriaTotal = ref(0)
+  const auditoriaMs = ref<number | null>(null)
 
   const CACHE_TTL_MS = 3 * 60 * 1000
   const fetchedAt = {
@@ -212,9 +234,9 @@ export const useAdminStore = defineStore('admin', () => {
     auditoria: 0,
     perfiles: 0,
   }
-  let historialSource: HistorialRow[] = []
   let historialSourceKey = ''
   let historialFetchedAt = 0
+  let auditoriaKey = ''
 
   function cacheFresh(at: number) {
     return at > 0 && Date.now() - at < CACHE_TTL_MS
@@ -222,19 +244,30 @@ export const useAdminStore = defineStore('admin', () => {
 
   function invalidateDerived() {
     historialFetchedAt = 0
+    historialSourceKey = ''
+    auditoriaKey = ''
     fetchedAt.auditoria = 0
     fetchedAt.dashboard = 0
   }
 
-  function historialQueryKey(filters: {
-    desde: Date | null
-    hasta: Date | null
-    salaId: string | null
-  }) {
+  function historialQueryKey(
+    filters: {
+      desde: Date | null
+      hasta: Date | null
+      salaId: string | null
+      sedeId: string | null
+      usuarioQuery: string
+    },
+    page: { first: number; rows: number },
+  ) {
     return JSON.stringify({
       desde: filters.desde ? startOfDayIso(filters.desde) : null,
       hasta: filters.hasta ? endOfDayIso(filters.hasta) : null,
       salaId: filters.salaId,
+      sedeId: filters.sedeId,
+      usuario: filters.usuarioQuery.trim().toLowerCase(),
+      first: page.first,
+      rows: page.rows,
     })
   }
 
@@ -358,54 +391,158 @@ export const useAdminStore = defineStore('admin', () => {
   }
 
   async function fetchHistorial(
-    filters: {
-      desde: Date | null
-      hasta: Date | null
-      salaId: string | null
-      usuarioQuery: string
-    },
+    filters: HistorialFiltros,
+    page: { first: number; rows: number },
     options?: { force?: boolean },
   ) {
-    const key = historialQueryKey(filters)
-    if (!options?.force && key === historialSourceKey && cacheFresh(historialFetchedAt)) {
-      historialRows.value = applyHistorialFilters(historialSource, filters)
-      return
-    }
+    const key = historialQueryKey(filters, page)
+    if (!options?.force && key === historialSourceKey && cacheFresh(historialFetchedAt)) return
+
+    const started = performance.now()
     loading.value = true
     try {
       if (demoMode.value) {
-        historialSource = buildHistorialRows(mock.registros, mock.salas, mock.perfiles)
-        historialSourceKey = key
-        historialFetchedAt = Date.now()
-        historialRows.value = applyHistorialFilters(historialSource, filters)
-        return
+        const all = applyHistorialFilters(
+          buildHistorialRows(
+            mock.registros,
+            mock.salas,
+            mock.perfiles,
+            sedesList.value.length ? sedesList.value : DEMO_SEDES,
+          ),
+          filters,
+        )
+        historialTotal.value = all.length
+        historialRows.value = all.slice(page.first, page.first + page.rows)
+      } else {
+        const pageRows = await consultarHistorial(filters, page.first, page.first + page.rows - 1)
+        historialTotal.value = pageRows.total
+        historialRows.value = pageRows.rows
       }
-      let query = supabase!
-        .from('registros')
-        .select('*, salas(nombre), perfiles(email, nombre)')
-        .order('entrada', { ascending: false })
-      if (filters.salaId) query = query.eq('sala_id', filters.salaId)
-      if (filters.desde) query = query.gte('entrada', startOfDayIso(filters.desde))
-      if (filters.hasta) query = query.lte('entrada', endOfDayIso(filters.hasta))
-      const { data, error } = await query
-      if (error) throw error
-      historialSource = (data ?? []).map((row) => {
-        const sala = row.salas as { nombre: string } | null
-        const perfil = row.perfiles as { email: string; nombre: string | null } | null
-        const { salas: _s, perfiles: _p, ...reg } = row
-        return {
-          ...(reg as Registro),
-          sala_nombre: sala?.nombre ?? '—',
-          usuario_email: perfil?.email ?? '—',
-          usuario_nombre: perfil?.nombre ?? null,
-        }
-      })
+      historialMs.value = Math.round(performance.now() - started)
       historialSourceKey = key
       historialFetchedAt = Date.now()
-      historialRows.value = applyHistorialFilters(historialSource, filters)
     } finally {
       loading.value = false
     }
+  }
+
+  async function fetchHistorialTodos(filters: HistorialFiltros): Promise<{ rows: HistorialRow[]; total: number }> {
+    if (demoMode.value) {
+      const rows = applyHistorialFilters(
+        buildHistorialRows(
+          mock.registros,
+          mock.salas,
+          mock.perfiles,
+          sedesList.value.length ? sedesList.value : DEMO_SEDES,
+        ),
+        filters,
+      )
+      return { rows, total: rows.length }
+    }
+
+    const pageSize = 200
+    const rows: HistorialRow[] = []
+    let total = 0
+    for (let from = 0; from < 5000; from += pageSize) {
+      const page = await consultarHistorial(filters, from, from + pageSize - 1)
+      total = page.total
+      rows.push(...page.rows)
+      if (rows.length >= total || page.rows.length < pageSize) break
+    }
+    return { rows, total }
+  }
+
+  async function salasMinimas(): Promise<Pick<Sala, 'id' | 'nombre' | 'sede_id'>[]> {
+    if (salasList.value.length) {
+      return salasList.value.map((s) => ({ id: s.id, nombre: s.nombre, sede_id: s.sede_id }))
+    }
+    const { data, error } = await supabase!.from('salas').select('id, nombre, sede_id')
+    if (error) throw error
+    return (data ?? []) as Pick<Sala, 'id' | 'nombre' | 'sede_id'>[]
+  }
+
+  async function consultarHistorial(
+    filters: HistorialFiltros,
+    from: number,
+    to: number,
+  ): Promise<{ rows: HistorialRow[]; total: number }> {
+    const salas = await salasMinimas()
+    let allowed = salas
+    if (isSedeUuid(filters.sedeId)) allowed = salas.filter((s) => s.sede_id === filters.sedeId)
+    else if (filters.sedeId === 'none') allowed = salas.filter((s) => !s.sede_id)
+
+    if (filters.sedeId && filters.sedeId !== 'all' && allowed.length === 0) {
+      return { rows: [], total: 0 }
+    }
+
+    const salaById = new Map(allowed.map((s) => [s.id, s]))
+    const usuarioOr = filtroUsuarioOr(filters.usuarioQuery)
+    const embed = usuarioOr ? 'perfiles!inner(email, nombre)' : 'perfiles(email, nombre)'
+    let query = supabase!
+      .from('registros')
+      .select(
+        `id, sala_id, usuario_id, motivo, entrada, salida, tipo_cierre, cerrado_por, ${embed}`,
+        { count: 'exact' },
+      )
+      .order('entrada', { ascending: false })
+
+    if (filters.sedeId && filters.sedeId !== 'all') {
+      query = query.in(
+        'sala_id',
+        allowed.map((s) => s.id),
+      )
+    }
+    if (filters.salaId) query = query.eq('sala_id', filters.salaId)
+    if (filters.desde) query = query.gte('entrada', startOfDayIso(filters.desde))
+    if (filters.hasta) query = query.lte('entrada', endOfDayIso(filters.hasta))
+    if (usuarioOr) query = query.or(usuarioOr, { referencedTable: 'perfiles' })
+
+    const { data, error, count } = await query.range(from, Math.max(from, to))
+    if (error) throw error
+
+    const filas = (data ?? []) as FilaRegistro[]
+    const cerradorIds = [
+      ...new Set(filas.map((row) => row.cerrado_por).filter((id): id is string => Boolean(id))),
+    ]
+    const perfilById = new Map<string, { email: string; nombre: string | null }>()
+    if (cerradorIds.length) {
+      const { data: perfiles, error: perfilesError } = await supabase!
+        .from('perfiles')
+        .select('id, email, nombre')
+        .in('id', cerradorIds)
+      if (perfilesError) throw perfilesError
+      for (const perfil of perfiles ?? []) {
+        perfilById.set(perfil.id as string, {
+          email: perfil.email as string,
+          nombre: (perfil.nombre as string | null) ?? null,
+        })
+      }
+    }
+
+    const sedeName = new Map(sedesList.value.map((s) => [s.id, s.nombre]))
+    const rows = filas.map((row) => {
+      const perfil = perfilEmbebido(row.perfiles)
+      const sala = salaById.get(row.sala_id)
+      const cerrador = row.cerrado_por ? perfilById.get(row.cerrado_por) : undefined
+      return {
+        id: row.id,
+        sala_id: row.sala_id,
+        usuario_id: row.usuario_id,
+        motivo: row.motivo,
+        entrada: row.entrada,
+        salida: row.salida,
+        tipo_cierre: row.tipo_cierre,
+        cerrado_por: row.cerrado_por,
+        sala_nombre: sala?.nombre ?? '—',
+        sede_id: sala?.sede_id ?? null,
+        sede_nombre: sala?.sede_id ? (sedeName.get(sala.sede_id) ?? 'Sin sede') : 'Sin sede',
+        usuario_email: perfil?.email ?? '—',
+        usuario_nombre: perfil?.nombre ?? null,
+        cerrado_por_nombre: cerrador?.nombre ?? null,
+        cerrado_por_email: cerrador?.email ?? null,
+      }
+    })
+    return { rows, total: count ?? rows.length }
   }
 
   async function fetchSalasAndHorarios(options?: { force?: boolean }) {
@@ -437,6 +574,7 @@ export const useAdminStore = defineStore('admin', () => {
     nombre: string
     ubicacion: string | null
     activa: boolean
+    sedeId: string
   }) {
     invalidateDerived()
     fetchedAt.salas = 0
@@ -447,6 +585,7 @@ export const useAdminStore = defineStore('admin', () => {
           s.nombre = payload.nombre
           s.ubicacion = payload.ubicacion
           s.activa = payload.activa
+          s.sede_id = payload.sedeId
         }
       } else {
         mock.salas.push({
@@ -455,6 +594,7 @@ export const useAdminStore = defineStore('admin', () => {
           ubicacion: payload.ubicacion,
           token_qr: newToken(),
           activa: payload.activa,
+          sede_id: payload.sedeId,
         })
       }
       await fetchSalasAndHorarios({ force: true })
@@ -467,6 +607,7 @@ export const useAdminStore = defineStore('admin', () => {
           nombre: payload.nombre,
           ubicacion: payload.ubicacion,
           activa: payload.activa,
+          sede_id: payload.sedeId,
         })
         .eq('id', payload.id)
       if (error) throw error
@@ -475,6 +616,7 @@ export const useAdminStore = defineStore('admin', () => {
         nombre: payload.nombre,
         ubicacion: payload.ubicacion,
         activa: payload.activa,
+        sede_id: payload.sedeId,
         token_qr: newToken(),
       })
       if (error) throw error
@@ -529,6 +671,51 @@ export const useAdminStore = defineStore('admin', () => {
     await fetchSalasAndHorarios({ force: true })
   }
 
+  async function guardarFranjaDias(payload: {
+    salaId: string
+    dias: number[]
+    horaInicio: string
+    horaFin: string
+    replaceIds?: string[]
+  }) {
+    const replaceIds = payload.replaceIds ?? []
+    const dias = [...new Set(payload.dias)].sort((a, b) => a - b)
+    invalidateDerived()
+    fetchedAt.salas = 0
+    if (demoMode.value) {
+      if (replaceIds.length) {
+        mock.horarios = mock.horarios.filter((h) => !replaceIds.includes(h.id))
+      }
+      for (const dia of dias) {
+        mock.horarios.push({
+          id: crypto.randomUUID(),
+          sala_id: payload.salaId,
+          dia_semana: dia,
+          hora_inicio: payload.horaInicio,
+          hora_fin: payload.horaFin,
+        })
+      }
+      await fetchSalasAndHorarios({ force: true })
+      return
+    }
+    if (replaceIds.length) {
+      const { error } = await supabase!.from('horarios').delete().in('id', replaceIds)
+      if (error) throw error
+    }
+    if (dias.length) {
+      const { error } = await supabase!.from('horarios').insert(
+        dias.map((dia) => ({
+          sala_id: payload.salaId,
+          dia_semana: dia,
+          hora_inicio: payload.horaInicio,
+          hora_fin: payload.horaFin,
+        })),
+      )
+      if (error) throw error
+    }
+    await fetchSalasAndHorarios({ force: true })
+  }
+
   async function deleteHorario(horarioId: string) {
     invalidateDerived()
     fetchedAt.salas = 0
@@ -577,23 +764,32 @@ export const useAdminStore = defineStore('admin', () => {
     fetchedAt.config = Date.now()
   }
 
-  async function fetchAuditoria(options?: { force?: boolean }) {
-    if (!options?.force && cacheFresh(fetchedAt.auditoria)) return
+  async function fetchAuditoria(
+    page: { first: number; rows: number } = { first: 0, rows: 20 },
+    options?: { force?: boolean },
+  ) {
+    const key = `${page.first}:${page.rows}`
+    if (!options?.force && key === auditoriaKey && cacheFresh(fetchedAt.auditoria)) return
+
+    const started = performance.now()
     loading.value = true
     try {
       if (demoMode.value) {
-        auditoriaRows.value = [...mock.auditoria].sort((a, b) =>
-          b.ocurrido_en.localeCompare(a.ocurrido_en),
-        )
-        fetchedAt.auditoria = Date.now()
-        return
+        const all = [...mock.auditoria].sort((a, b) => b.ocurrido_en.localeCompare(a.ocurrido_en))
+        auditoriaTotal.value = all.length
+        auditoriaRows.value = all.slice(page.first, page.first + page.rows)
+      } else {
+        const { data, error, count } = await supabase!
+          .from('auditoria')
+          .select('id, ocurrido_en, actor_id, accion, entidad, entidad_id, detalle', { count: 'exact' })
+          .order('ocurrido_en', { ascending: false })
+          .range(page.first, page.first + page.rows - 1)
+        if (error) throw error
+        auditoriaRows.value = (data ?? []) as AuditoriaRow[]
+        auditoriaTotal.value = count ?? auditoriaRows.value.length
       }
-      const { data, error } = await supabase!
-        .from('auditoria')
-        .select('*')
-        .order('ocurrido_en', { ascending: false })
-      if (error) throw error
-      auditoriaRows.value = (data ?? []) as AuditoriaRow[]
+      auditoriaMs.value = Math.round(performance.now() - started)
+      auditoriaKey = key
       fetchedAt.auditoria = Date.now()
     } finally {
       loading.value = false
@@ -607,10 +803,17 @@ export const useAdminStore = defineStore('admin', () => {
       fetchedAt.perfiles = Date.now()
       return
     }
-    const { data, error } = await supabase!.from('perfiles').select('id, email, nombre').order('email')
+    const { data, error } = await supabase!
+      .from('perfiles')
+      .select('id, email, nombre, sede_id')
+      .order('email')
     if (error) throw error
     perfilesList.value = (data ?? []) as Perfil[]
     fetchedAt.perfiles = Date.now()
+  }
+
+  async function fetchSedes() {
+    sedesList.value = await loadSedes()
   }
 
   function resetMockDemo() {
@@ -622,21 +825,29 @@ export const useAdminStore = defineStore('admin', () => {
     loading,
     dashboardSalas,
     historialRows,
+    historialTotal,
+    historialMs,
     salasList,
+    sedesList,
     horariosList,
     perfilesList,
     margenGraciaMinutos,
     auditoriaRows,
+    auditoriaTotal,
+    auditoriaMs,
     fetchDashboard,
     startOccupancyWatch,
     stopOccupancyWatch,
     closeRegistro,
     closeAllInSala,
     fetchHistorial,
+    fetchHistorialTodos,
     fetchSalasAndHorarios,
+    fetchSedes,
     saveSala,
     rotateSalaToken,
     saveHorario,
+    guardarFranjaDias,
     deleteHorario,
     fetchConfig,
     saveMargenGracia,
@@ -645,6 +856,37 @@ export const useAdminStore = defineStore('admin', () => {
     resetMockDemo,
   }
 })
+
+type HistorialFiltros = {
+  desde: Date | null
+  hasta: Date | null
+  salaId: string | null
+  sedeId: string | null
+  usuarioQuery: string
+}
+
+type FilaRegistro = {
+  id: string
+  sala_id: string
+  usuario_id: string
+  motivo: string
+  entrada: string
+  salida: string | null
+  tipo_cierre: TipoCierre | null
+  cerrado_por: string | null
+  perfiles: { email: string; nombre: string | null } | { email: string; nombre: string | null }[] | null
+}
+
+function perfilEmbebido(value: FilaRegistro['perfiles']) {
+  if (Array.isArray(value)) return value[0] ?? null
+  return value
+}
+
+function filtroUsuarioOr(q: string): string | null {
+  const clean = q.trim().replace(/[%*,()"\\]/g, '')
+  if (!clean) return null
+  return `email.ilike."%${clean}%",nombre.ilike."%${clean}%"`
+}
 
 function startOfDayIso(d: Date): string {
   const x = new Date(d)
@@ -660,9 +902,11 @@ function endOfDayIso(d: Date): string {
 
 function applyHistorialFilters(
   rows: HistorialRow[],
-  filters: { usuarioQuery: string; salaId: string | null },
+  filters: { usuarioQuery: string; salaId: string | null; sedeId: string | null },
 ): HistorialRow[] {
   let out = rows
+  if (isSedeUuid(filters.sedeId)) out = out.filter((r) => r.sede_id === filters.sedeId)
+  else if (filters.sedeId === 'none') out = out.filter((r) => !r.sede_id)
   if (filters.salaId) {
     out = out.filter((r) => r.sala_id === filters.salaId)
   }

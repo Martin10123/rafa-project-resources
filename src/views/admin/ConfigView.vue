@@ -108,6 +108,7 @@ async function guardar() {
   gap: 1rem;
   width: 100%;
   max-width: 28rem;
+  margin-bottom: 1rem;
 }
 
 .field {

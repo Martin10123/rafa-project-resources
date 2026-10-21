@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { authCallbackUrl, isSupabaseConfigured, supabase } from '../lib/supabase'
+import { limpiarActividad, marcarActividad, sesionInactiva } from '../lib/sessionIdle'
 import type { Perfil } from '../types'
 
 /** Dominio por defecto al escribir solo el usuario (sin @). */
@@ -18,7 +19,7 @@ export const RAFA_ADMIN_EMAIL = 'aux.audiovisual6@tecnologicocomfenalco.edu.co'
 const DEMO_SESSION_STORAGE_KEY = 'educative-resources-demo-auth'
 const MIN_PASSWORD_LENGTH = 8
 
-type DemoSessionStored = { email: string; nombre: string | null }
+type DemoSessionStored = { email: string; nombre: string | null; sedeId?: string | null }
 
 export function isAllowedEmail(raw: string): boolean {
   const normalized = raw.trim().toLowerCase()
@@ -83,17 +84,37 @@ export const useAuthStore = defineStore('auth', () => {
   const email = ref<string | null>(null)
   const perfil = ref<Perfil | null>(null)
   const isAdmin = ref(false)
+  const isSuperadmin = ref(false)
+  const isJefa = ref(false)
   const ready = ref(false)
   const demoMode = ref(false)
 
   const isAuthenticated = computed(() => Boolean(userId.value))
   const usesSupabase = computed(() => isSupabaseConfigured)
+  let ultimoMarcado = 0
+
+  function registrarActividad() {
+    if (!userId.value || demoMode.value) return
+    const now = Date.now()
+    if (now - ultimoMarcado < 60_000) return
+    ultimoMarcado = now
+    marcarActividad(now)
+  }
+
+  async function expireIfIdle(): Promise<boolean> {
+    if (!ready.value || !supabase || demoMode.value || !userId.value) return false
+    if (!sesionInactiva()) return false
+    await signOut()
+    return true
+  }
 
   function clearSession() {
     userId.value = null
     email.value = null
     perfil.value = null
     isAdmin.value = false
+    isSuperadmin.value = false
+    isJefa.value = false
     demoMode.value = false
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem(DEMO_SESSION_STORAGE_KEY)
@@ -105,6 +126,7 @@ export const useAuthStore = defineStore('auth', () => {
     const payload: DemoSessionStored = {
       email: email.value,
       nombre: perfil.value?.nombre ?? null,
+      sedeId: perfil.value?.sede_id ?? null,
     }
     sessionStorage.setItem(DEMO_SESSION_STORAGE_KEY, JSON.stringify(payload))
   }
@@ -117,8 +139,12 @@ export const useAuthStore = defineStore('auth', () => {
       const parsed = JSON.parse(raw) as DemoSessionStored
       if (!isAllowedEmail(parsed.email)) return false
       setDemoSession(parsed.email)
-      if (parsed.nombre?.trim() && perfil.value) {
-        perfil.value = { ...perfil.value, nombre: parsed.nombre.trim() }
+      if (perfil.value && (parsed.nombre?.trim() || parsed.sedeId)) {
+        perfil.value = {
+          ...perfil.value,
+          nombre: parsed.nombre?.trim() || perfil.value.nombre,
+          sede_id: parsed.sedeId ?? null,
+        }
         persistDemoSession()
       }
       return true
@@ -137,6 +163,8 @@ export const useAuthStore = defineStore('auth', () => {
     email.value = payload.email
     perfil.value = payload.perfil ?? null
     isAdmin.value = payload.isAdmin ?? false
+    isSuperadmin.value = false
+    isJefa.value = false
     demoMode.value = false
   }
 
@@ -149,8 +177,11 @@ export const useAuthStore = defineStore('auth', () => {
       id: userId.value,
       email: normalized,
       nombre: null,
+      sede_id: null,
     }
     isAdmin.value = !isSupabaseConfigured
+    isSuperadmin.value = false
+    isJefa.value = false
     persistDemoSession()
   }
 
@@ -159,14 +190,28 @@ export const useAuthStore = defineStore('auth', () => {
 
     const { data: perfilData, error: perfilError } = await supabase
       .from('perfiles')
-      .select('id, email, nombre')
+      .select('id, email, nombre, sede_id')
       .eq('id', uid)
       .maybeSingle()
 
     if (perfilError) throw perfilError
     perfil.value = (perfilData as Perfil | null) ?? null
 
-    isAdmin.value = false
+    let nextAdmin = false
+    let nextSuperadmin = false
+    let nextJefa = false
+
+    const { data: superRow, error: superError } = await supabase
+      .from('superadmins')
+      .select('user_id')
+      .eq('user_id', uid)
+      .maybeSingle()
+
+    if (!superError && superRow) {
+      nextSuperadmin = true
+      nextAdmin = true
+    }
+
     const { data: adminRow, error: adminError } = await supabase
       .from('admins')
       .select('user_id')
@@ -174,14 +219,30 @@ export const useAuthStore = defineStore('auth', () => {
       .maybeSingle()
 
     if (!adminError && adminRow) {
-      isAdmin.value = true
-      return
+      nextAdmin = true
+    } else if (!nextAdmin) {
+      const { data: rpcAdmin, error: rpcError } = await supabase.rpc('is_admin')
+      if (!rpcError && rpcAdmin === true) nextAdmin = true
     }
 
-    const { data: rpcAdmin, error: rpcError } = await supabase.rpc('is_admin')
-    if (!rpcError && rpcAdmin === true) {
-      isAdmin.value = true
+    if (!nextAdmin) {
+      const { data: jefaRow, error: jefaError } = await supabase
+        .from('jefas')
+        .select('user_id')
+        .eq('user_id', uid)
+        .maybeSingle()
+
+      if (!jefaError && jefaRow) {
+        nextJefa = true
+      } else {
+        const { data: rpcJefa, error: rpcJefaError } = await supabase.rpc('is_jefa')
+        if (!rpcJefaError && rpcJefa === true) nextJefa = true
+      }
     }
+
+    isSuperadmin.value = nextSuperadmin
+    isAdmin.value = nextAdmin
+    isJefa.value = nextJefa
   }
 
   async function applySupabaseUser(uid: string, userEmail: string | undefined) {
@@ -199,7 +260,19 @@ export const useAuthStore = defineStore('auth', () => {
       data: { session },
     } = await supabase.auth.getSession()
     if (session?.user) {
+      if (sesionInactiva(session.user.last_sign_in_at)) {
+        limpiarActividad()
+        try {
+          await supabase.auth.signOut({ scope: 'local' })
+        } catch {
+          /* la sesión local se descarta igual */
+        }
+        clearSession()
+        return
+      }
       await applySupabaseUser(session.user.id, session.user.email)
+      ultimoMarcado = Date.now()
+      marcarActividad(ultimoMarcado)
     } else if (!demoMode.value) {
       clearSession()
     }
@@ -256,6 +329,8 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (data.user) {
       await applySupabaseUser(data.user.id, data.user.email)
+      ultimoMarcado = Date.now()
+      marcarActividad(ultimoMarcado)
     }
 
     return { ok: true }
@@ -319,6 +394,8 @@ export const useAuthStore = defineStore('auth', () => {
 
     if (data.session?.user) {
       await applySupabaseUser(data.session.user.id, data.session.user.email)
+      ultimoMarcado = Date.now()
+      marcarActividad(ultimoMarcado)
       return { ok: true, needsEmailConfirmation: false }
     }
 
@@ -396,7 +473,11 @@ export const useAuthStore = defineStore('auth', () => {
         refresh_token: refreshToken,
       })
       if (error) return { ok: false, message: mapAuthError(error.message) }
-      if (data.user) await applySupabaseUser(data.user.id, data.user.email)
+      if (data.user) {
+        await applySupabaseUser(data.user.id, data.user.email)
+        ultimoMarcado = Date.now()
+        marcarActividad(ultimoMarcado)
+      }
       return { ok: true }
     }
 
@@ -418,7 +499,11 @@ export const useAuthStore = defineStore('auth', () => {
       if (error) {
         return { ok: false, message: mapAuthError(error.message) }
       }
-      if (data.user) await applySupabaseUser(data.user.id, data.user.email)
+      if (data.user) {
+        await applySupabaseUser(data.user.id, data.user.email)
+        ultimoMarcado = Date.now()
+        marcarActividad(ultimoMarcado)
+      }
       return { ok: true }
     }
 
@@ -428,7 +513,11 @@ export const useAuthStore = defineStore('auth', () => {
         type: type as 'email' | 'magiclink' | 'signup' | 'recovery',
       })
       if (error) return { ok: false, message: mapAuthError(error.message) }
-      if (data.user) await applySupabaseUser(data.user.id, data.user.email)
+      if (data.user) {
+        await applySupabaseUser(data.user.id, data.user.email)
+        ultimoMarcado = Date.now()
+        marcarActividad(ultimoMarcado)
+      }
       return { ok: true }
     }
 
@@ -461,12 +550,38 @@ export const useAuthStore = defineStore('auth', () => {
       .from('perfiles')
       .update({ nombre: trimmed })
       .eq('id', userId.value)
-      .select('id, email, nombre')
+      .select('id, email, nombre, sede_id')
       .single()
 
     if (error) {
       return { ok: false, message: error.message }
     }
+
+    perfil.value = data as Perfil
+    return { ok: true }
+  }
+
+  async function updateSede(
+    sedeId: string,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (!sedeId) return { ok: false, message: 'Elige una sede' }
+
+    if (demoMode.value || !supabase) {
+      if (perfil.value) perfil.value = { ...perfil.value, sede_id: sedeId }
+      persistDemoSession()
+      return { ok: true }
+    }
+
+    if (!userId.value) return { ok: false, message: 'No hay sesión activa' }
+
+    const { data, error } = await supabase
+      .from('perfiles')
+      .update({ sede_id: sedeId })
+      .eq('id', userId.value)
+      .select('id, email, nombre, sede_id')
+      .single()
+
+    if (error) return { ok: false, message: error.message }
 
     perfil.value = data as Perfil
     return { ok: true }
@@ -481,6 +596,8 @@ export const useAuthStore = defineStore('auth', () => {
       }
     }
     clearSession()
+    limpiarActividad()
+    ultimoMarcado = 0
   }
 
   return {
@@ -488,6 +605,8 @@ export const useAuthStore = defineStore('auth', () => {
     email,
     perfil,
     isAdmin,
+    isSuperadmin,
+    isJefa,
     ready,
     demoMode,
     usesSupabase,
@@ -502,6 +621,9 @@ export const useAuthStore = defineStore('auth', () => {
     updatePassword,
     completeFromMagicLinkUrl,
     updateNombre,
+    updateSede,
     signOut,
+    registrarActividad,
+    expireIfIdle,
   }
 })

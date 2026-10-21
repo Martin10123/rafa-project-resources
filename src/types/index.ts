@@ -1,11 +1,20 @@
 export type TipoCierre = 'usuario' | 'admin' | 'automatico'
 
+export type SedeCodigo = 'A' | 'B' | 'C'
+
+export interface Sede {
+  id: string
+  codigo: SedeCodigo
+  nombre: string
+}
+
 export interface Sala {
   id: string
   nombre: string
   ubicacion: string | null
   token_qr: string
   activa: boolean
+  sede_id: string | null
 }
 
 export interface Horario {
@@ -20,6 +29,7 @@ export interface Perfil {
   id: string
   email: string
   nombre: string | null
+  sede_id: string | null
 }
 
 export interface Registro {

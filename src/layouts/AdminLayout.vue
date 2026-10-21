@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, computed, ref } from 'vue'
+import { onUnmounted, computed, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useAdminStore } from '../stores/admin'
@@ -11,7 +11,9 @@ const admin = useAdminStore()
 const menuOpen = ref(false)
 const signingOut = ref(false)
 
-const links = [
+type NavLink = { to: string; label: string; icon: string; exact?: boolean }
+
+const allLinks: NavLink[] = [
   { to: '/admin', label: 'Panel', icon: 'pi pi-th-large', exact: true },
   { to: '/admin/historial', label: 'Historial', icon: 'pi pi-history' },
   { to: '/admin/salas', label: 'Salas', icon: 'pi pi-building' },
@@ -19,8 +21,14 @@ const links = [
   { to: '/admin/auditoria', label: 'Auditoría', icon: 'pi pi-shield' },
 ]
 
+const links = computed<NavLink[]>(() =>
+  auth.isJefa && !auth.isAdmin
+    ? [{ to: '/admin/historial', label: 'Historial', icon: 'pi pi-download' }]
+    : allLinks,
+)
+
 const pageTitle = computed(() => {
-  const match = links.find((l) =>
+  const match = links.value.find((l) =>
     l.exact ? route.path === l.to : route.path.startsWith(l.to),
   )
   return match?.label ?? 'Administración'
@@ -34,9 +42,14 @@ function closeMenu() {
   menuOpen.value = false
 }
 
-onMounted(() => {
-  admin.startOccupancyWatch()
-})
+watch(
+  () => auth.isAdmin,
+  (isAdmin) => {
+    if (isAdmin) admin.startOccupancyWatch()
+    else admin.stopOccupancyWatch()
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   admin.stopOccupancyWatch()
@@ -105,6 +118,12 @@ async function logout() {
         class="fixed inset-y-0 left-0 z-40 w-[min(16rem,88vw)] border-r border-white/60 bg-white/80 px-3 pt-[5.25rem] pb-6 shadow-2xl shadow-navy/10 backdrop-blur-xl transition-transform duration-300 min-[900px]:sticky min-[900px]:top-[4.25rem] min-[900px]:z-10 min-[900px]:h-[calc(100svh-4.25rem)] min-[900px]:w-60 min-[900px]:pt-4 min-[900px]:shadow-none"
         :class="menuOpen ? 'translate-x-0' : '-translate-x-[105%] min-[900px]:translate-x-0'"
       >
+        <p
+          v-if="auth.isSuperadmin"
+          class="mx-3 mb-3 rounded-xl bg-navy px-3 py-2 text-xs font-bold tracking-wide text-white uppercase"
+        >
+          Superadmin
+        </p>
         <nav class="flex flex-col gap-1" aria-label="Administración">
           <RouterLink
             v-for="link in links"

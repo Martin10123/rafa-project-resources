@@ -13,6 +13,8 @@ import Tag from 'primevue/tag'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import AdminPageHeader from './AdminPageHeader.vue'
+import SedeFiltro from '../../components/SedeFiltro.vue'
+import { filtrarPorSede, isSedeUuid, readVistaSede, sedeNombre, writeVistaSede } from '../../lib/sedes'
 import type { Horario, Sala } from '../../types'
 import {
   diaSemanaLabel,
@@ -30,14 +32,16 @@ const editingSala = ref<Sala | null>(null)
 const formNombre = ref('')
 const formUbicacion = ref('')
 const formActiva = ref(true)
+const formSedeId = ref<string | null>(null)
+const sedeFiltro = ref<string | null>(readVistaSede())
 
-const selectedSalaId = ref<string | null>(null)
-const selectedSalaRow = ref<Sala | null>(null)
-const horarioDialog = ref(false)
-const editingHorario = ref<Horario | null>(null)
-const formDia = ref(1)
-const formInicio = ref('08:00')
-const formFin = ref('12:00')
+const franjaSala = ref<Sala | null>(null)
+const franjaDialog = ref(false)
+const franjaSaving = ref(false)
+const editingFranjaIds = ref<string[]>([])
+const formDias = ref<number[]>([1, 2, 3, 4, 5])
+const formInicio = ref('07:00')
+const formFin = ref('18:00')
 
 const qrDialog = ref(false)
 const qrSala = ref<Sala | null>(null)
@@ -45,33 +49,51 @@ const qrDataUrl = ref('')
 
 const diaOptions = [1, 2, 3, 4, 5, 6, 7].map((d) => ({
   label: diaSemanaLabel(d),
+  short: ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'][d - 1],
   value: d,
 }))
 
-const horariosDeSala = computed(() =>
-  admin.horariosList.filter((h) => h.sala_id === selectedSalaId.value),
-)
+const salasVisibles = computed(() => filtrarPorSede(admin.salasList, sedeFiltro.value))
 
-const selectedSala = computed(() =>
-  admin.salasList.find((s) => s.id === selectedSalaId.value) ?? null,
-)
+const franjaGrupos = computed(() => {
+  const list = admin.horariosList.filter((h) => h.sala_id === franjaSala.value?.id)
+  const map = new Map<string, Horario[]>()
+  for (const horario of list) {
+    const key = `${formatTimeHm(horario.hora_inicio)}|${formatTimeHm(horario.hora_fin)}`
+    const bucket = map.get(key) ?? []
+    bucket.push(horario)
+    map.set(key, bucket)
+  }
+  return [...map.values()].map((items) => ({
+    inicio: formatTimeHm(items[0].hora_inicio),
+    fin: formatTimeHm(items[0].hora_fin),
+    dias: items.map((item) => item.dia_semana).sort((a, b) => a - b),
+    items,
+  }))
+})
+
+const lunesAViernesActivo = computed(() => [1, 2, 3, 4, 5].every((dia) => formDias.value.includes(dia)))
 
 function personasDentro(salaId: string) {
   return admin.dashboardSalas.find((sala) => sala.id === salaId)?.openRegistros.length ?? 0
 }
 
-function onSalaSelect(event: { data: Sala }) {
-  selectedSalaId.value = event.data.id
+function diasFranjaLabel(dias: number[]): string {
+  const key = dias.join(',')
+  if (key === '1,2,3,4,5') return 'Lunes a viernes'
+  if (key === '1,2,3,4,5,6') return 'Lunes a sábado'
+  if (key === '1,2,3,4,5,6,7') return 'Toda la semana'
+  if (key === '6,7') return 'Fin de semana'
+  return dias.map((dia) => diaSemanaLabel(dia)).join(', ')
 }
 
 onMounted(async () => {
   try {
-    await admin.fetchSalasAndHorarios()
-    await admin.fetchDashboard({ silent: true })
-    if (admin.salasList.length && !selectedSalaId.value) {
-      selectedSalaId.value = admin.salasList[0].id
-      selectedSalaRow.value = admin.salasList[0]
-    }
+    await Promise.all([
+      admin.fetchSalasAndHorarios(),
+      admin.fetchSedes(),
+      admin.fetchDashboard({ silent: true }),
+    ])
   } catch (e) {
     toast.add({
       severity: 'error',
@@ -82,18 +104,14 @@ onMounted(async () => {
   }
 })
 
-watch(
-  () => admin.salasList.length,
-  (n) => {
-    if (n && !selectedSalaId.value) selectedSalaId.value = admin.salasList[0].id
-  },
-)
+watch(sedeFiltro, (value) => writeVistaSede(value))
 
 function openNewSala() {
   editingSala.value = null
   formNombre.value = ''
   formUbicacion.value = ''
   formActiva.value = true
+  formSedeId.value = isSedeUuid(sedeFiltro.value) ? sedeFiltro.value : null
   salaDialog.value = true
 }
 
@@ -102,6 +120,7 @@ function openEditSala(sala: Sala) {
   formNombre.value = sala.nombre
   formUbicacion.value = sala.ubicacion ?? ''
   formActiva.value = sala.activa
+  formSedeId.value = sala.sede_id
   salaDialog.value = true
 }
 
@@ -111,12 +130,17 @@ async function saveSalaForm() {
     toast.add({ severity: 'warn', summary: 'El nombre es obligatorio', life: 3000 })
     return
   }
+  if (!formSedeId.value) {
+    toast.add({ severity: 'warn', summary: 'Elige la sede de la sala', life: 3000 })
+    return
+  }
   try {
     await admin.saveSala({
       id: editingSala.value?.id,
       nombre,
       ubicacion: formUbicacion.value.trim() || null,
       activa: formActiva.value,
+      sedeId: formSedeId.value,
     })
     salaDialog.value = false
     toast.add({ severity: 'success', summary: 'Sala guardada', life: 2500 })
@@ -130,61 +154,98 @@ async function saveSalaForm() {
   }
 }
 
-function openNewHorario() {
-  if (!selectedSalaId.value) return
-  editingHorario.value = null
-  formDia.value = 1
-  formInicio.value = '08:00'
-  formFin.value = '12:00'
-  horarioDialog.value = true
+function resetFranjaForm() {
+  editingFranjaIds.value = []
+  formDias.value = [1, 2, 3, 4, 5]
+  formInicio.value = '07:00'
+  formFin.value = '18:00'
 }
 
-function openEditHorario(h: Horario) {
-  editingHorario.value = h
-  formDia.value = h.dia_semana
-  formInicio.value = formatTimeHm(h.hora_inicio)
-  formFin.value = formatTimeHm(h.hora_fin)
-  horarioDialog.value = true
+function openFranjas(sala: Sala) {
+  franjaSala.value = sala
+  resetFranjaForm()
+  franjaDialog.value = true
+}
+
+function toggleDia(dia: number) {
+  formDias.value = formDias.value.includes(dia)
+    ? formDias.value.filter((item) => item !== dia)
+    : [...formDias.value, dia].sort((a, b) => a - b)
+}
+
+function elegirLunesViernes() {
+  const laborables = [1, 2, 3, 4, 5]
+  if (lunesAViernesActivo.value) {
+    formDias.value = formDias.value.filter((dia) => dia > 5)
+    return
+  }
+  formDias.value = [...new Set([...formDias.value, ...laborables])].sort((a, b) => a - b)
+}
+
+function editarFranja(items: Horario[]) {
+  editingFranjaIds.value = items.map((item) => item.id)
+  formDias.value = items.map((item) => item.dia_semana).sort((a, b) => a - b)
+  formInicio.value = formatTimeHm(items[0].hora_inicio)
+  formFin.value = formatTimeHm(items[0].hora_fin)
 }
 
 function toPgTime(hm: string): string {
   return hm.length === 5 ? `${hm}:00` : hm
 }
 
-async function saveHorarioForm() {
-  if (!selectedSalaId.value) return
+async function saveFranjaForm() {
+  if (!franjaSala.value || franjaSaving.value) return
+  if (!formDias.value.length) {
+    toast.add({ severity: 'warn', summary: 'Elige al menos un día', life: 3000 })
+    return
+  }
+  if (!formInicio.value || !formFin.value || formFin.value <= formInicio.value) {
+    toast.add({ severity: 'warn', summary: 'La hora fin tiene que ser mayor que la de inicio', life: 3500 })
+    return
+  }
+  franjaSaving.value = true
   try {
-    await admin.saveHorario({
-      id: editingHorario.value?.id,
-      sala_id: selectedSalaId.value,
-      dia_semana: formDia.value,
-      hora_inicio: toPgTime(formInicio.value),
-      hora_fin: toPgTime(formFin.value),
+    await admin.guardarFranjaDias({
+      salaId: franjaSala.value.id,
+      dias: formDias.value,
+      horaInicio: toPgTime(formInicio.value),
+      horaFin: toPgTime(formFin.value),
+      replaceIds: editingFranjaIds.value,
     })
-    horarioDialog.value = false
-    toast.add({ severity: 'success', summary: 'Horario guardado', life: 2500 })
+    resetFranjaForm()
+    toast.add({ severity: 'success', summary: 'Franja guardada', life: 2500 })
   } catch (e) {
     toast.add({
       severity: 'error',
       summary: 'Error',
-      detail: e instanceof Error ? e.message : 'Revise que la hora fin sea mayor que inicio',
+      detail: e instanceof Error ? e.message : 'No se pudo guardar la franja',
       life: 5000,
     })
+  } finally {
+    franjaSaving.value = false
   }
 }
 
-function confirmDeleteHorario(h: Horario) {
+function confirmDeleteFranja(items: Horario[]) {
   confirm.require({
-    message: `¿Eliminar franja del ${diaSemanaLabel(h.dia_semana)}?`,
-    header: 'Eliminar horario',
+    message: `¿Eliminar la franja de ${diasFranjaLabel(items.map((item) => item.dia_semana).sort((a, b) => a - b))}?`,
+    header: 'Eliminar franja',
     icon: 'pi pi-trash',
     acceptClass: 'p-button-danger',
     acceptLabel: 'Eliminar',
     rejectLabel: 'Cancelar',
     accept: async () => {
+      if (!franjaSala.value) return
       try {
-        await admin.deleteHorario(h.id)
-        toast.add({ severity: 'success', summary: 'Horario eliminado', life: 2500 })
+        await admin.guardarFranjaDias({
+          salaId: franjaSala.value.id,
+          dias: [],
+          horaInicio: items[0].hora_inicio,
+          horaFin: items[0].hora_fin,
+          replaceIds: items.map((item) => item.id),
+        })
+        if (items.some((item) => editingFranjaIds.value.includes(item.id))) resetFranjaForm()
+        toast.add({ severity: 'success', summary: 'Franja eliminada', life: 2500 })
       } catch (e) {
         toast.add({
           severity: 'error',
@@ -243,7 +304,7 @@ function downloadQr() {
   <section class="admin-page">
     <AdminPageHeader
       title="Salas y horarios"
-      description="Administre salas, franjas horarias, rotación de tokens y códigos QR para check-in."
+      description="Cada sala pertenece a una sede. Así los espacios de una sede no aparecen en las otras."
     >
       <template #meta>
         <Message v-if="admin.demoMode" severity="warn" :closable="false" class="demo-banner">
@@ -252,6 +313,14 @@ function downloadQr() {
       </template>
     </AdminPageHeader>
 
+    <SedeFiltro
+      v-model="sedeFiltro"
+      :sedes="admin.sedesList"
+      allow-all
+      allow-none
+      prompt="¿Qué sede vas a administrar? Elige una para no mezclar los espacios."
+    />
+
     <div class="layout">
       <div class="panel">
         <div class="panel__toolbar">
@@ -259,17 +328,20 @@ function downloadQr() {
           <Button label="Nueva sala" icon="pi pi-plus" size="small" @click="openNewSala" />
         </div>
         <DataTable
-          v-model:selection="selectedSalaRow"
-          :value="admin.salasList"
+          :value="salasVisibles"
           :loading="admin.loading"
-          selection-mode="single"
           data-key="id"
           striped-rows
+          paginator
+          :rows="8"
+          :rows-per-page-options="[8, 20]"
           class="salas-table"
-          @row-select="onSalaSelect"
+          empty-message="Elige una sede para ver sus salas."
         >
-          <Column selection-mode="single" header-style="width: 3rem" />
           <Column field="nombre" header="Nombre" />
+          <Column header="Sede">
+            <template #body="{ data }">{{ sedeNombre(admin.sedesList, data.sede_id) }}</template>
+          </Column>
           <Column field="ubicacion" header="Ubicación" />
           <Column header="Ocupación">
             <template #body="{ data }">
@@ -287,7 +359,8 @@ function downloadQr() {
           <Column header="Acciones" style="min-width: 12rem">
             <template #body="{ data }">
               <div class="row-actions">
-                <Button icon="pi pi-pencil" text rounded severity="secondary" @click="openEditSala(data)" />
+                <Button icon="pi pi-pencil" text rounded severity="secondary" aria-label="Editar sala" @click="openEditSala(data)" />
+                <Button icon="pi pi-clock" label="Franjas" text size="small" @click="openFranjas(data)" />
                 <Button icon="pi pi-qrcode" text rounded @click="showQr(data)" />
                 <Button
                   icon="pi pi-refresh"
@@ -302,64 +375,29 @@ function downloadQr() {
           </Column>
         </DataTable>
       </div>
-
-      <div class="panel">
-        <div class="panel__toolbar">
-          <h3>
-            Horarios
-            <span v-if="selectedSala" class="panel__sub">— {{ selectedSala.nombre }}</span>
-          </h3>
-          <Button
-            label="Agregar franja"
-            icon="pi pi-clock"
-            size="small"
-            :disabled="!selectedSalaId"
-            @click="openNewHorario"
-          />
-        </div>
-        <DataTable
-          :value="horariosDeSala"
-          striped-rows
-          class="horarios-table"
-          empty-message="Seleccione una sala o agregue franjas horarias."
-        >
-          <Column header="Día">
-            <template #body="{ data }">{{ diaSemanaLabel(data.dia_semana) }}</template>
-          </Column>
-          <Column header="Inicio">
-            <template #body="{ data }">{{ formatTimeHm(data.hora_inicio) }}</template>
-          </Column>
-          <Column header="Fin">
-            <template #body="{ data }">{{ formatTimeHm(data.hora_fin) }}</template>
-          </Column>
-          <Column header="">
-            <template #body="{ data }">
-              <div class="row-actions">
-                <Button icon="pi pi-pencil" text rounded @click="openEditHorario(data)" />
-                <Button
-                  icon="pi pi-trash"
-                  text
-                  rounded
-                  severity="danger"
-                  @click="confirmDeleteHorario(data)"
-                />
-              </div>
-            </template>
-          </Column>
-        </DataTable>
-      </div>
     </div>
 
     <Dialog
       v-model:visible="salaDialog"
       :header="editingSala ? 'Editar sala' : 'Nueva sala'"
       modal
-      :style="{ width: 'min(100%, 28rem)' }"
+      :style="{ width: 'min(calc(100vw - 2rem), 28rem)' }"
     >
       <div class="dialog-form">
         <label>
           <span>Nombre</span>
           <InputText v-model="formNombre" fluid />
+        </label>
+        <label>
+          <span>Sede</span>
+          <Select
+            v-model="formSedeId"
+            :options="admin.sedesList"
+            option-label="nombre"
+            option-value="id"
+            placeholder="Elige la sede"
+            fluid
+          />
         </label>
         <label>
           <span>Ubicación</span>
@@ -377,28 +415,80 @@ function downloadQr() {
     </Dialog>
 
     <Dialog
-      v-model:visible="horarioDialog"
-      :header="editingHorario ? 'Editar horario' : 'Nuevo horario'"
+      v-model:visible="franjaDialog"
+      :header="franjaSala ? `Franjas — ${franjaSala.nombre}` : 'Franjas'"
       modal
-      :style="{ width: 'min(100%, 28rem)' }"
+      :style="{ width: 'min(calc(100vw - 2rem), 36rem)' }"
     >
       <div class="dialog-form">
-        <label>
-          <span>Día de la semana</span>
-          <Select v-model="formDia" :options="diaOptions" option-label="label" option-value="value" fluid />
-        </label>
-        <label>
-          <span>Hora inicio</span>
-          <InputText v-model="formInicio" type="time" fluid />
-        </label>
-        <label>
-          <span>Hora fin</span>
-          <InputText v-model="formFin" type="time" fluid />
-        </label>
+        <ul v-if="franjaGrupos.length" class="franja-list">
+          <li v-for="grupo in franjaGrupos" :key="`${grupo.inicio}-${grupo.fin}`">
+            <span>
+              <strong>{{ diasFranjaLabel(grupo.dias) }}</strong>
+              <small>{{ grupo.inicio }} – {{ grupo.fin }}</small>
+            </span>
+            <span class="row-actions">
+              <Button icon="pi pi-pencil" text rounded aria-label="Editar franja" @click="editarFranja(grupo.items)" />
+              <Button
+                icon="pi pi-trash"
+                text
+                rounded
+                severity="danger"
+                aria-label="Eliminar franja"
+                @click="confirmDeleteFranja(grupo.items)"
+              />
+            </span>
+          </li>
+        </ul>
+        <p v-else class="franja-empty">Esta sala todavía no tiene franjas.</p>
+
+        <p class="franja-form-title">
+          {{ editingFranjaIds.length ? 'Editar franja' : 'Agregar franja' }}
+        </p>
+        <div>
+          <span class="field-label">Días con el mismo horario</span>
+          <div class="dia-picker" role="group" aria-label="Días de la franja">
+            <button
+              v-for="dia in diaOptions"
+              :key="dia.value"
+              type="button"
+              class="dia-picker__btn"
+              :class="{ 'dia-picker__btn--on': formDias.includes(dia.value) }"
+              :aria-pressed="formDias.includes(dia.value)"
+              @click="toggleDia(dia.value)"
+            >
+              {{ dia.short }}
+            </button>
+          </div>
+          <button
+            type="button"
+            class="dia-preset"
+            :class="{ 'dia-preset--on': lunesAViernesActivo }"
+            @click="elegirLunesViernes"
+          >
+            Lunes a viernes
+          </button>
+        </div>
+        <div class="franja-horas">
+          <label>
+            <span>Hora inicio</span>
+            <InputText v-model="formInicio" type="time" fluid />
+          </label>
+          <label>
+            <span>Hora fin</span>
+            <InputText v-model="formFin" type="time" fluid />
+          </label>
+        </div>
       </div>
       <template #footer>
-        <Button label="Cancelar" text @click="horarioDialog = false" />
-        <Button label="Guardar" icon="pi pi-check" @click="saveHorarioForm" />
+        <Button v-if="editingFranjaIds.length" label="Cancelar edición" text @click="resetFranjaForm" />
+        <Button label="Cerrar" text @click="franjaDialog = false" />
+        <Button
+          :label="editingFranjaIds.length ? 'Guardar franja' : 'Agregar franja'"
+          icon="pi pi-check"
+          :loading="franjaSaving"
+          @click="saveFranjaForm"
+        />
       </template>
     </Dialog>
 
@@ -406,7 +496,7 @@ function downloadQr() {
       v-model:visible="qrDialog"
       :header="qrSala ? `QR — ${qrSala.nombre}` : 'Código QR'"
       modal
-      :style="{ width: 'min(100%, 22rem)' }"
+      :style="{ width: 'min(calc(100vw - 2rem), 22rem)' }"
     >
       <div v-if="qrSala" class="qr-box">
         <img :src="qrDataUrl" alt="Código QR de check-in" width="280" height="280" />
@@ -460,15 +550,101 @@ function downloadQr() {
   color: var(--color-navy);
 }
 
-.panel__sub {
-  font-weight: 500;
+.salas-table {
+  width: 100%;
+}
+
+.franja-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.franja-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.85rem;
+  background: rgb(255 255 255 / 0.7);
+  border: 1px solid rgb(226 232 240 / 0.9);
+}
+
+.franja-list strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.franja-list small {
+  color: var(--color-muted);
+}
+
+.franja-empty {
+  margin: 0;
   color: var(--color-muted);
   font-size: 0.9rem;
 }
 
-.salas-table,
-.horarios-table {
-  width: 100%;
+.franja-form-title {
+  margin: 0.25rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-navy);
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.dia-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dia-picker__btn {
+  min-width: 3.1rem;
+  min-height: 2.6rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgb(203 213 225);
+  background: white;
+  color: var(--color-navy);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dia-picker__btn--on {
+  background: var(--color-navy);
+  border-color: var(--color-navy);
+  color: white;
+}
+
+.dia-preset {
+  margin-top: 0.55rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-navy);
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.dia-preset--on {
+  color: var(--color-muted);
+}
+
+.franja-horas {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
 }
 
 .row-actions {
@@ -511,9 +687,4 @@ function downloadQr() {
   color: var(--color-muted);
 }
 
-@media (min-width: 1000px) {
-  .layout {
-    grid-template-columns: 1.2fr 1fr;
-  }
-}
 </style>

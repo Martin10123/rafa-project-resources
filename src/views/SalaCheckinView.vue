@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import Textarea from 'primevue/textarea'
 import AppLayout from '../layouts/AppLayout.vue'
+import SedePicker from '../components/SedePicker.vue'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/auth'
 import type { RealtimeChannel } from '@supabase/supabase-js'
@@ -21,6 +22,8 @@ const historial = ref<Registro[]>([])
 const pageLoading = ref(true)
 const actionLoading = ref(false)
 const pageError = ref<string | null>(null)
+const eligiendoSede = ref(false)
+const sedeDeSala = ref<string | null>(null)
 const now = ref(Date.now())
 let salaChannel: RealtimeChannel | null = null
 let clock: ReturnType<typeof setInterval> | null = null
@@ -29,6 +32,8 @@ const salaId = computed(() => String(route.params.id ?? ''))
 const token = computed(() => String(route.query.t ?? ''))
 
 const checkedIn = computed(() => Boolean(registroAbierto.value))
+const needsSede = computed(() => !auth.isAdmin && !auth.perfil?.sede_id)
+const showSedePicker = computed(() => needsSede.value || eligiendoSede.value)
 const motivosRecientes = computed(() => {
   const seen = new Set<string>()
   const list: string[] = []
@@ -49,6 +54,7 @@ const demoSala: Sala = {
   ubicacion: 'Campus — vista previa',
   token_qr: 'preview',
   activa: true,
+  sede_id: null,
 }
 
 function mapRegistroError(message: string): string {
@@ -61,6 +67,15 @@ function mapRegistroError(message: string): string {
   }
   if (lower.includes('inactiva') || lower.includes('inexistente')) {
     return 'Esta sala no está disponible.'
+  }
+  if (lower.includes('no pertenece a tu sede')) {
+    return 'Esta sala es de otra sede. No puedes registrarte aquí.'
+  }
+  if (lower.includes('selecciona tu sede')) {
+    return 'Primero elige la sede a la que perteneces.'
+  }
+  if (lower.includes('no tiene sede asignada')) {
+    return 'Esta sala todavía no tiene sede. Avisa a quien administra las salas.'
   }
   return message
 }
@@ -148,10 +163,13 @@ async function loadSala() {
   pageLoading.value = true
   pageError.value = null
   sala.value = null
+  sedeDeSala.value = null
   registroAbierto.value = null
   historial.value = []
 
   try {
+    if (needsSede.value) return
+
     if (!token.value) {
       pageError.value = 'Falta el token del QR (?t=…). Escanea el código en la puerta.'
       return
@@ -168,14 +186,21 @@ async function loadSala() {
 
     const { data, error } = await supabase
       .from('salas')
-      .select('id, nombre, ubicacion, token_qr, activa')
+      .select('id, nombre, ubicacion, token_qr, activa, sede_id, sedes(nombre)')
       .eq('id', salaId.value)
       .maybeSingle()
 
     if (error) throw error
 
-    if (!data || !data.activa) {
-      pageError.value = 'Sala no encontrada o inactiva.'
+    if (!data) {
+      pageError.value = auth.isAdmin
+        ? 'Sala no encontrada.'
+        : 'No encontramos esta sala para tu sede. Puede ser de otra sede o el QR ya no es válido.'
+      return
+    }
+
+    if (!data.activa) {
+      pageError.value = 'Esta sala no está disponible.'
       return
     }
 
@@ -184,7 +209,22 @@ async function loadSala() {
       return
     }
 
-    sala.value = data as Sala
+    const sedeEmbed = data.sedes as { nombre: string } | { nombre: string }[] | null
+    const sedeRow = Array.isArray(sedeEmbed) ? sedeEmbed[0] : sedeEmbed
+    if (!auth.isAdmin && data.sede_id && data.sede_id !== auth.perfil?.sede_id) {
+      pageError.value = `Esta sala es de ${sedeRow?.nombre ?? 'otra sede'}. No puedes registrarte aquí.`
+      return
+    }
+
+    sedeDeSala.value = sedeRow?.nombre ?? null
+    sala.value = {
+      id: data.id,
+      nombre: data.nombre,
+      ubicacion: data.ubicacion,
+      token_qr: data.token_qr,
+      activa: data.activa,
+      sede_id: data.sede_id,
+    }
     await Promise.all([loadOpenRegistro(data.id), loadHistorial(data.id)])
     listenSala(data.id)
   } catch (err) {
@@ -288,6 +328,11 @@ async function checkOut() {
   }
 }
 
+async function onSedeSaved() {
+  eligiendoSede.value = false
+  await loadSala()
+}
+
 async function signOut() {
   await auth.signOut()
   await router.push({ name: 'login' })
@@ -299,6 +344,12 @@ onMounted(() => {
   }, 30000)
   void loadSala()
 })
+watch(
+  () => auth.isAdmin,
+  (isAdmin, wasAdmin) => {
+    if (isAdmin && !wasAdmin && !sala.value) void loadSala()
+  },
+)
 watch(() => [route.params.id, route.query.t], loadSala)
 onUnmounted(() => {
   if (clock) clearInterval(clock)
@@ -317,10 +368,15 @@ onUnmounted(() => {
             </p>
             <h2 class="m-0 mt-1 text-2xl font-extrabold tracking-tight text-navy">
               <template v-if="sala">{{ sala.nombre }}</template>
+              <template v-else-if="showSedePicker">Elige tu sede</template>
               <template v-else-if="pageLoading">Cargando sala…</template>
               <template v-else>Sala no disponible</template>
             </h2>
-            <p v-if="sala?.ubicacion" class="mt-1 mb-0 text-sm text-slate-600">{{ sala.ubicacion }}</p>
+            <p v-if="sala?.ubicacion || sedeDeSala" class="mt-1 mb-0 text-sm text-slate-600">
+              <template v-if="sedeDeSala">{{ sedeDeSala }}</template>
+              <template v-if="sedeDeSala && sala?.ubicacion"> · </template>
+              <template v-if="sala?.ubicacion">{{ sala.ubicacion }}</template>
+            </p>
           </div>
           <button
             type="button"
@@ -331,12 +387,31 @@ onUnmounted(() => {
           </button>
         </header>
 
-        <p v-if="pageError" role="alert" class="m-0 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-          {{ pageError }}
-        </p>
-        <p v-else-if="pageLoading" class="m-0 text-sm text-slate-600">Validando sala y token QR…</p>
+        <SedePicker
+          v-if="showSedePicker"
+          bare
+          :cancelable="!needsSede"
+          @saved="onSedeSaved"
+          @cancel="eligiendoSede = false"
+        />
 
-        <template v-else-if="sala">
+        <template v-else>
+          <div v-if="pageError" class="flex flex-col gap-3">
+            <p role="alert" class="m-0 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {{ pageError }}
+            </p>
+            <button
+              v-if="!auth.isAdmin"
+              type="button"
+              class="w-fit text-sm font-semibold text-navy underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/40"
+              @click="eligiendoSede = true"
+            >
+              Cambiar sede
+            </button>
+          </div>
+          <p v-else-if="pageLoading" class="m-0 text-sm text-slate-600">Validando sala y token QR…</p>
+
+          <template v-else-if="sala">
           <div v-if="checkedIn && registroAbierto" class="rounded-2xl bg-navy/[0.06] px-4 py-3">
             <p class="m-0 text-sm leading-relaxed text-slate-700">
               Entraste {{ formatCuando(registroAbierto.entrada) }} · llevas
@@ -389,6 +464,7 @@ onUnmounted(() => {
           >
             {{ actionLoading ? 'Cerrando…' : 'Salir de la sala' }}
           </button>
+          </template>
         </template>
       </article>
 

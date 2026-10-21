@@ -222,7 +222,7 @@ watch(step, () => {
 
 function postLoginPath() {
   const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
-  return resolvePostLoginPath(auth.isAdmin, redirect)
+  return resolvePostLoginPath(auth.isAdmin, auth.isJefa, redirect)
 }
 
 function reportError(summary: string, detail: string) {
@@ -889,7 +889,7 @@ onMounted(async () => {
       :draggable="false"
       header="Completa tu perfil"
       :closable="false"
-      :style="{ width: 'min(100% - 2rem, 28rem)' }"
+      :style="{ width: 'min(calc(100vw - 2rem), 28rem)' }"
       :pt="dialogPt"
     >
       <p class="m-0 text-sm leading-relaxed text-slate-600">Es tu primer ingreso. ¿Cómo te llamas?</p>

@@ -72,4 +72,21 @@
       0 18px 50px -28px rgb(15 23 42 / 0.38),
       0 8px 24px -18px rgb(44 67 143 / 0.28);
   }
+
+  @media (max-width: 640px) {
+    .p-dialog-mask {
+      padding: 1rem;
+    }
+
+    .p-dialog {
+      max-width: calc(100vw - 2rem) !important;
+      max-height: calc(100dvh - 2rem) !important;
+      border-radius: 1rem !important;
+    }
+
+    .p-dialog-content {
+      overflow: auto;
+      max-height: calc(100dvh - 8.5rem);
+    }
+  }
 }

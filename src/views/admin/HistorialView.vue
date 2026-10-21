@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import Button from 'primevue/button'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -9,39 +9,87 @@ import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import { useToast } from 'primevue/usetoast'
 import AdminPageHeader from './AdminPageHeader.vue'
-import { downloadCsv, rowsToCsv } from '../../lib/csv'
-import { formatDateTime, useAdminStore } from '../../stores/admin'
+import SedeFiltro from '../../components/SedeFiltro.vue'
+import { downloadXlsx, type ExcelValue } from '../../lib/excel'
+import { isSedeUuid, readVistaSede, writeVistaSede } from '../../lib/sedes'
+import { useAuthStore } from '../../stores/auth'
+import { formatDateTime, useAdminStore, type HistorialRow } from '../../stores/admin'
 
 const admin = useAdminStore()
+const auth = useAuthStore()
 const toast = useToast()
 
 const desde = ref<Date | null>(null)
 const hasta = ref<Date | null>(null)
 const salaId = ref<string | null>(null)
 const usuarioQuery = ref('')
+const sedeFiltro = ref<string | null>(sedeInicial())
+const first = ref(0)
+const pageSize = ref(15)
+const exporting = ref(false)
 
-const salaOptions = ref<{ label: string; value: string | null }[]>([{ label: 'Todas las salas', value: null }])
+const soloJefa = computed(() => auth.isJefa && !auth.isAdmin)
+const canQuery = computed(() => auth.isAdmin || isSedeUuid(sedeFiltro.value))
+
+const salaOptions = computed(() => {
+  const base = isSedeUuid(sedeFiltro.value)
+    ? admin.salasList.filter((s) => s.sede_id === sedeFiltro.value)
+    : sedeFiltro.value === 'none'
+      ? admin.salasList.filter((s) => !s.sede_id)
+      : admin.salasList
+  return [{ label: 'Todas las salas', value: null }, ...base.map((s) => ({ label: s.nombre, value: s.id }))]
+})
+
+function sedeInicial(): string | null {
+  const saved = readVistaSede()
+  if (auth.isAdmin) return saved ?? 'all'
+  return isSedeUuid(saved) ? saved : null
+}
 
 onMounted(async () => {
-  await admin.fetchSalasAndHorarios()
-  salaOptions.value = [
-    { label: 'Todas las salas', value: null },
-    ...admin.salasList.map((s) => ({ label: s.nombre, value: s.id })),
-  ]
-  await buscar(false)
+  try {
+    await Promise.all([admin.fetchSalasAndHorarios(), admin.fetchSedes()])
+    await buscar(true)
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error al cargar',
+      detail: e instanceof Error ? e.message : 'Intente de nuevo',
+      life: 5000,
+    })
+  }
 })
+
+watch(
+  () => auth.isAdmin,
+  (isAdmin) => {
+    if (!isAdmin || admin.historialRows.length) return
+    if (sedeFiltro.value === 'all' || sedeFiltro.value === 'none') void buscar(true)
+  },
+)
+
+watch(sedeFiltro, (value, previous) => {
+  writeVistaSede(value)
+  if (value === previous) return
+  salaId.value = null
+  first.value = 0
+  if (canQuery.value) void buscar(true)
+})
+
+function filtrosActuales() {
+  return {
+    desde: desde.value,
+    hasta: hasta.value,
+    salaId: salaId.value,
+    sedeId: sedeFiltro.value,
+    usuarioQuery: usuarioQuery.value,
+  }
+}
 
 async function buscar(force = true) {
   try {
-    await admin.fetchHistorial(
-      {
-        desde: desde.value,
-        hasta: hasta.value,
-        salaId: salaId.value,
-        usuarioQuery: usuarioQuery.value,
-      },
-      { force },
-    )
+    if (!canQuery.value) return
+    await admin.fetchHistorial(filtrosActuales(), { first: first.value, rows: pageSize.value }, { force })
   } catch (e) {
     toast.add({
       severity: 'error',
@@ -52,37 +100,96 @@ async function buscar(force = true) {
   }
 }
 
+function buscarDesdeInicio() {
+  first.value = 0
+  void buscar(true)
+}
+
+function onPage(event: { first: number; rows: number }) {
+  first.value = event.first
+  pageSize.value = event.rows
+  void buscar(true)
+}
+
 function limpiarFiltros() {
   desde.value = null
   hasta.value = null
   salaId.value = null
   usuarioQuery.value = ''
+  first.value = 0
   void buscar()
 }
 
-function exportarCsv() {
-  const headers = [
-    'Sala',
-    'Usuario',
-    'Correo',
-    'Motivo',
-    'Entrada',
-    'Salida',
-    'Tipo cierre',
-  ]
-  const rows = admin.historialRows.map((r) => [
-    r.sala_nombre,
-    r.usuario_nombre ?? '',
-    r.usuario_email,
-    r.motivo,
-    formatDateTime(r.entrada),
-    r.salida ? formatDateTime(r.salida) : '',
-    r.tipo_cierre ?? '',
-  ])
-  const csv = rowsToCsv(headers, rows)
+function quienCerro(row: HistorialRow): string {
+  if (!row.salida) return ''
+  if (row.tipo_cierre === 'automatico') return 'Cierre automático'
+  if (row.cerrado_por_nombre?.trim()) return row.cerrado_por_nombre
+  if (row.cerrado_por_email) return row.cerrado_por_email
+  if (row.tipo_cierre === 'usuario') return row.usuario_nombre?.trim() || row.usuario_email
+  return ''
+}
+
+function nombreArchivo(): string {
   const stamp = new Date().toISOString().slice(0, 10)
-  downloadCsv(`historial-checkin-${stamp}.csv`, csv)
-  toast.add({ severity: 'info', summary: 'CSV descargado', life: 2500 })
+  const sede = admin.sedesList.find((item) => item.id === sedeFiltro.value)
+  const parte = sede
+    ? `sede-${sede.codigo.toLowerCase()}`
+    : sedeFiltro.value === 'none'
+      ? 'sin-sede'
+      : 'todas'
+  return `aperturas-cierres-${parte}-${stamp}.xlsx`
+}
+
+function fechaExcel(iso: string): Date | string {
+  const fecha = new Date(iso)
+  return Number.isNaN(fecha.getTime()) ? iso : fecha
+}
+
+async function exportarExcel() {
+  if (!canQuery.value || exporting.value) return
+  exporting.value = true
+  try {
+    const { rows, total } = await admin.fetchHistorialTodos(filtrosActuales())
+    const headers = [
+      'Sede',
+      'Sala',
+      'Quién abrió',
+      'Correo',
+      'Motivo',
+      'Entrada',
+      'Salida',
+      'Quién cerró',
+      'Tipo de cierre',
+    ]
+    const excelRows: ExcelValue[][] = rows.map((r) => [
+      r.sede_nombre,
+      r.sala_nombre,
+      r.usuario_nombre?.trim() || r.usuario_email,
+      r.usuario_email,
+      r.motivo,
+      fechaExcel(r.entrada),
+      r.salida ? fechaExcel(r.salida) : 'Abierto',
+      quienCerro(r),
+      tipoCierreLabel(r.tipo_cierre),
+    ])
+    downloadXlsx(nombreArchivo(), 'Aperturas y cierres', headers, excelRows, [
+      16, 28, 26, 40, 46, 20, 20, 24, 18,
+    ])
+    toast.add({
+      severity: rows.length < total ? 'warn' : 'info',
+      summary: rows.length < total ? `Excel con ${rows.length} de ${total}` : 'Excel descargado',
+      life: 2500,
+    })
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'No se pudo exportar',
+      detail: e instanceof Error ? e.message : 'Intente de nuevo',
+      life: 5000,
+    })
+  } finally {
+    exporting.value = false
+  }
 }
 
 function tipoCierreLabel(t: string | null): string {
@@ -99,8 +206,12 @@ function tipoCierreLabel(t: string | null): string {
 <template>
   <section class="admin-page">
     <AdminPageHeader
-      title="Historial"
-      description="Consulte registros de entrada y salida. Los filtros aplican también a la exportación CSV."
+      :title="soloJefa ? 'Descarga de aperturas y cierres' : 'Historial'"
+      :description="
+        soloJefa
+          ? 'Elige una sede. El archivo solo incluye quién abre y quién cierra las salas de esa sede.'
+          : 'Consulta quién abre y quién cierra. El filtro de sede también aplica al Excel.'
+      "
     >
       <template #meta>
         <Message v-if="admin.demoMode" severity="warn" :closable="false" class="demo-banner">
@@ -108,6 +219,18 @@ function tipoCierreLabel(t: string | null): string {
         </Message>
       </template>
     </AdminPageHeader>
+
+    <SedeFiltro
+      v-model="sedeFiltro"
+      :sedes="admin.sedesList"
+      :allow-all="auth.isAdmin"
+      :allow-none="auth.isAdmin"
+      :prompt="
+        soloJefa
+          ? '¿De qué sede vas a descargar? Cada archivo queda separado.'
+          : '¿Qué sede quieres consultar?'
+      "
+    />
 
     <div class="filters">
       <div class="filters__field">
@@ -148,44 +271,55 @@ function tipoCierreLabel(t: string | null): string {
         <InputText id="hist-usuario" v-model="usuarioQuery" fluid placeholder="Buscar…" />
       </div>
       <div class="filters__actions">
-        <Button label="Buscar" icon="pi pi-search" @click="buscar(true)" />
+        <Button label="Buscar" icon="pi pi-search" :disabled="!canQuery" @click="buscarDesdeInicio" />
         <Button label="Limpiar" icon="pi pi-filter-slash" outlined severity="secondary" @click="limpiarFiltros" />
         <Button
-          label="Exportar CSV"
-          icon="pi pi-download"
+          label="Exportar Excel"
+          icon="pi pi-file-excel"
           outlined
-          :disabled="!admin.historialRows.length"
-          @click="exportarCsv"
+          :loading="exporting"
+          :disabled="!canQuery || !admin.historialTotal"
+          @click="exportarExcel"
         />
       </div>
     </div>
 
+    <p v-if="canQuery && admin.historialMs != null" class="query-meta">
+      {{ admin.historialTotal }} registros · consulta {{ admin.historialMs }} ms
+    </p>
+
     <DataTable
-      :value="admin.historialRows"
+      :value="canQuery ? admin.historialRows : []"
       :loading="admin.loading"
+      lazy
       striped-rows
       paginator
-      :rows="15"
+      :first="first"
+      :rows="pageSize"
+      :total-records="canQuery ? admin.historialTotal : 0"
       :rows-per-page-options="[15, 30, 50]"
-      sort-field="entrada"
-      :sort-order="-1"
       class="hist-table"
-      empty-message="No hay registros con estos filtros."
+      :empty-message="canQuery ? 'No hay registros con estos filtros.' : 'Elige una sede para ver y descargar.'"
+      @page="onPage"
     >
-      <Column field="sala_nombre" header="Sala" sortable />
-      <Column header="Usuario">
+      <Column field="sede_nombre" header="Sede" />
+      <Column field="sala_nombre" header="Sala" />
+      <Column header="Quién abrió">
         <template #body="{ data }">
           <span>{{ data.usuario_nombre ?? data.usuario_email }}</span>
         </template>
       </Column>
       <Column field="motivo" header="Motivo" />
-      <Column field="entrada" header="Entrada" sortable>
+      <Column field="entrada" header="Entrada">
         <template #body="{ data }">{{ formatDateTime(data.entrada) }}</template>
       </Column>
-      <Column field="salida" header="Salida" sortable>
+      <Column field="salida" header="Salida">
         <template #body="{ data }">{{
           data.salida ? formatDateTime(data.salida) : 'Abierto'
         }}</template>
+      </Column>
+      <Column header="Quién cerró">
+        <template #body="{ data }">{{ quienCerro(data) || '—' }}</template>
       </Column>
       <Column header="Cierre">
         <template #body="{ data }">{{ tipoCierreLabel(data.tipo_cierre) }}</template>
@@ -201,6 +335,12 @@ function tipoCierreLabel(t: string | null): string {
 
 .demo-banner {
   margin-top: 0.5rem;
+}
+
+.query-meta {
+  margin: 0 0 0.75rem;
+  font-size: 0.8rem;
+  color: var(--color-muted);
 }
 
 .filters {

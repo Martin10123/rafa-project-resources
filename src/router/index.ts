@@ -36,12 +36,13 @@ const router = createRouter({
     {
       path: '/admin',
       component: () => import('../layouts/AdminLayout.vue'),
-      meta: { layout: 'admin', requiresAuth: true, requiresAdmin: true },
+      meta: { layout: 'admin', requiresAuth: true, requiresStaff: true },
       children: [
         {
           path: '',
           name: 'admin-dashboard',
           component: () => import('../views/admin/DashboardView.vue'),
+          meta: { requiresAdmin: true },
         },
         {
           path: 'historial',
@@ -52,16 +53,19 @@ const router = createRouter({
           path: 'salas',
           name: 'admin-salas',
           component: () => import('../views/admin/SalasView.vue'),
+          meta: { requiresAdmin: true },
         },
         {
           path: 'config',
           name: 'admin-config',
           component: () => import('../views/admin/ConfigView.vue'),
+          meta: { requiresAdmin: true },
         },
         {
           path: 'auditoria',
           name: 'admin-auditoria',
           component: () => import('../views/admin/AuditoriaView.vue'),
+          meta: { requiresAdmin: true },
         },
       ],
     },
@@ -79,6 +83,7 @@ router.beforeEach(async (to) => {
 
   const needsAuth = to.matched.some((record) => record.meta.requiresAuth)
   const needsAdmin = to.matched.some((record) => record.meta.requiresAdmin)
+  const needsStaff = to.matched.some((record) => record.meta.requiresStaff)
   const guestOnly = to.matched.some((record) => record.meta.guestOnly)
 
   if (needsAuth && !auth.isAuthenticated) {
@@ -88,13 +93,22 @@ router.beforeEach(async (to) => {
     }
   }
 
+  if (auth.isAuthenticated && to.name === 'inicio') {
+    if (auth.isAdmin) return { name: 'admin-dashboard' }
+    if (auth.isJefa) return { name: 'admin-historial' }
+  }
+
   if (needsAdmin && auth.isAuthenticated && !auth.isAdmin) {
+    return auth.isJefa ? { name: 'admin-historial' } : { name: 'inicio' }
+  }
+
+  if (needsStaff && auth.isAuthenticated && !auth.isAdmin && !auth.isJefa) {
     return { name: 'inicio' }
   }
 
   if (guestOnly && auth.isAuthenticated) {
     const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : null
-    return resolvePostLoginPath(auth.isAdmin, redirect)
+    return resolvePostLoginPath(auth.isAdmin, auth.isJefa, redirect)
   }
 
   return true

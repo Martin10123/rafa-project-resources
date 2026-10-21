@@ -1,19 +1,35 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Tag from 'primevue/tag'
 import Button from 'primevue/button'
 import Message from 'primevue/message'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
 import AdminPageHeader from './AdminPageHeader.vue'
+import SedeFiltro from '../../components/SedeFiltro.vue'
+import { filtrarPorSede, readVistaSede, sedeNombre, writeVistaSede } from '../../lib/sedes'
 import { formatDateTime, useAdminStore } from '../../stores/admin'
 
 const admin = useAdminStore()
 const confirm = useConfirm()
 const toast = useToast()
+const sedeFiltro = ref<string | null>(readVistaSede())
+
+const salasVisibles = computed(() => filtrarPorSede(admin.dashboardSalas, sedeFiltro.value))
+
+watch(sedeFiltro, (value) => writeVistaSede(value))
 
 onMounted(async () => {
-  await admin.fetchDashboard()
+  try {
+    await Promise.all([admin.fetchDashboard(), admin.fetchSedes()])
+  } catch (e) {
+    toast.add({
+      severity: 'error',
+      summary: 'Error',
+      detail: e instanceof Error ? e.message : 'No se pudieron cargar las salas',
+      life: 5000,
+    })
+  }
   document.addEventListener('visibilitychange', refreshIfVisible)
 })
 
@@ -95,16 +111,30 @@ function confirmCloseSala(salaId: string, nombre: string, count: number) {
       </template>
     </AdminPageHeader>
 
+    <SedeFiltro
+      v-model="sedeFiltro"
+      :sedes="admin.sedesList"
+      allow-all
+      allow-none
+      prompt="¿Qué sede vas a revisar? Así no se mezclan los espacios."
+    />
+
     <div v-if="admin.loading && !admin.dashboardSalas.length" class="admin-page__loading">
       Cargando salas…
     </div>
 
+    <p v-else-if="!sedeFiltro" class="admin-page__loading">Elige una sede para ver sus salas.</p>
+
     <div v-else class="grid">
-      <article v-for="sala in admin.dashboardSalas" :key="sala.id" class="tile">
+      <p v-if="!salasVisibles.length" class="admin-page__loading">No hay salas en esta sede.</p>
+      <article v-for="sala in salasVisibles" :key="sala.id" class="tile">
         <div class="tile__head">
           <div>
             <h3>{{ sala.nombre }}</h3>
-            <p v-if="sala.ubicacion" class="tile__ubic">{{ sala.ubicacion }}</p>
+            <p class="tile__ubic">
+              {{ sedeNombre(admin.sedesList, sala.sede_id) }}
+              <template v-if="sala.ubicacion"> · {{ sala.ubicacion }}</template>
+            </p>
           </div>
           <Tag
             :value="sala.openRegistros.length ? 'Ocupada' : 'Disponible'"

@@ -15,7 +15,7 @@ const status = ref('Confirmando cuenta…')
 
 function postLoginPath() {
   const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : null
-  return resolvePostLoginPath(auth.isAdmin, redirect)
+  return resolvePostLoginPath(auth.isAdmin, auth.isJefa, redirect)
 }
 
 onMounted(async () => {
