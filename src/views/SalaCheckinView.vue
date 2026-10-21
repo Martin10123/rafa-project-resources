@@ -10,6 +10,15 @@ import { useAuthStore } from '../stores/auth'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { Registro, Sala } from '../types'
 
+type SalaAbierta = {
+  id: string
+  nombre: string
+  ubicacion: string | null
+  activa: boolean
+  sede_id: string | null
+  sede_nombre: string | null
+}
+
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
@@ -22,7 +31,6 @@ const historial = ref<Registro[]>([])
 const pageLoading = ref(true)
 const actionLoading = ref(false)
 const pageError = ref<string | null>(null)
-const eligiendoSede = ref(false)
 const sedeDeSala = ref<string | null>(null)
 const now = ref(Date.now())
 let salaChannel: RealtimeChannel | null = null
@@ -33,7 +41,6 @@ const token = computed(() => String(route.query.t ?? ''))
 
 const checkedIn = computed(() => Boolean(registroAbierto.value))
 const needsSede = computed(() => !auth.isAdmin && !auth.perfil?.sede_id)
-const showSedePicker = computed(() => needsSede.value || eligiendoSede.value)
 const motivosRecientes = computed(() => {
   const seen = new Set<string>()
   const list: string[] = []
@@ -73,6 +80,9 @@ function mapRegistroError(message: string): string {
   }
   if (lower.includes('selecciona tu sede')) {
     return 'Primero elige la sede a la que perteneces.'
+  }
+  if (lower.includes('no coincide')) {
+    return 'El QR no coincide con esta sala. Escanea el código actualizado.'
   }
   if (lower.includes('no tiene sede asignada')) {
     return 'Esta sala todavía no tiene sede. Avisa a quien administra las salas.'
@@ -185,48 +195,41 @@ async function loadSala() {
     }
 
     const { data, error } = await supabase
-      .from('salas')
-      .select('id, nombre, ubicacion, token_qr, activa, sede_id, sedes(nombre)')
-      .eq('id', salaId.value)
+      .rpc('abrir_sala', {
+        p_sala_id: salaId.value,
+        p_token: token.value,
+      })
       .maybeSingle()
 
     if (error) throw error
 
-    if (!data) {
-      pageError.value = auth.isAdmin
-        ? 'Sala no encontrada.'
-        : 'No encontramos esta sala para tu sede. Puede ser de otra sede o el QR ya no es válido.'
-      return
-    }
-
-    if (!data.activa) {
-      pageError.value = 'Esta sala no está disponible.'
-      return
-    }
-
-    if (data.token_qr !== token.value) {
+    const abierta = data as SalaAbierta | null
+    if (!abierta) {
       pageError.value = 'El QR no coincide con esta sala. Escanea el código actualizado.'
       return
     }
 
-    const sedeEmbed = data.sedes as { nombre: string } | { nombre: string }[] | null
-    const sedeRow = Array.isArray(sedeEmbed) ? sedeEmbed[0] : sedeEmbed
-    if (!auth.isAdmin && data.sede_id && data.sede_id !== auth.perfil?.sede_id) {
-      pageError.value = `Esta sala es de ${sedeRow?.nombre ?? 'otra sede'}. No puedes registrarte aquí.`
+    if (!abierta.activa) {
+      pageError.value = 'Esta sala no está disponible.'
       return
     }
 
-    sedeDeSala.value = sedeRow?.nombre ?? null
-    sala.value = {
-      id: data.id,
-      nombre: data.nombre,
-      ubicacion: data.ubicacion,
-      token_qr: data.token_qr,
-      activa: data.activa,
-      sede_id: data.sede_id,
+    if (!auth.isAdmin && abierta.sede_id && abierta.sede_id !== auth.perfil?.sede_id) {
+      pageError.value = `Esta sala es de ${abierta.sede_nombre ?? 'otra sede'}. No puedes registrarte aquí.`
+      return
     }
-    await Promise.all([loadOpenRegistro(data.id), loadHistorial(data.id)])
-    listenSala(data.id)
+
+    sedeDeSala.value = abierta.sede_nombre
+    sala.value = {
+      id: abierta.id,
+      nombre: abierta.nombre,
+      ubicacion: abierta.ubicacion,
+      token_qr: token.value,
+      activa: abierta.activa,
+      sede_id: abierta.sede_id,
+    }
+    await Promise.all([loadOpenRegistro(abierta.id), loadHistorial(abierta.id)])
+    listenSala(abierta.id)
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error al cargar la sala'
     pageError.value = message
@@ -264,15 +267,11 @@ async function checkIn() {
       return
     }
 
-    const { data, error } = await supabase
-      .from('registros')
-      .insert({
-        sala_id: sala.value!.id,
-        usuario_id: auth.userId!,
-        motivo: text,
-      })
-      .select('id, sala_id, usuario_id, motivo, entrada, salida, tipo_cierre, cerrado_por')
-      .single()
+    const { error } = await supabase.rpc('checkin', {
+      p_sala_id: sala.value!.id,
+      p_token: token.value,
+      p_motivo: text,
+    })
 
     if (error) {
       toast.add({
@@ -284,7 +283,7 @@ async function checkIn() {
       return
     }
 
-    registroAbierto.value = data as Registro
+    await loadOpenRegistro(sala.value!.id)
     await loadHistorial(sala.value!.id)
     toast.add({ severity: 'success', summary: 'Check-in registrado', life: 3000 })
   } finally {
@@ -304,10 +303,9 @@ async function checkOut() {
       return
     }
 
-    const { error } = await supabase
-      .from('registros')
-      .update({ salida: new Date().toISOString() })
-      .eq('id', registroAbierto.value.id)
+    const { error } = await supabase.rpc('checkout', {
+      p_registro_id: registroAbierto.value.id,
+    })
 
     if (error) {
       toast.add({
@@ -329,7 +327,6 @@ async function checkOut() {
 }
 
 async function onSedeSaved() {
-  eligiendoSede.value = false
   await loadSala()
 }
 
@@ -368,7 +365,7 @@ onUnmounted(() => {
             </p>
             <h2 class="m-0 mt-1 text-2xl font-extrabold tracking-tight text-navy">
               <template v-if="sala">{{ sala.nombre }}</template>
-              <template v-else-if="showSedePicker">Elige tu sede</template>
+              <template v-else-if="needsSede">Elige tu sede</template>
               <template v-else-if="pageLoading">Cargando sala…</template>
               <template v-else>Sala no disponible</template>
             </h2>
@@ -387,27 +384,13 @@ onUnmounted(() => {
           </button>
         </header>
 
-        <SedePicker
-          v-if="showSedePicker"
-          bare
-          :cancelable="!needsSede"
-          @saved="onSedeSaved"
-          @cancel="eligiendoSede = false"
-        />
+        <SedePicker v-if="needsSede" bare @saved="onSedeSaved" />
 
         <template v-else>
           <div v-if="pageError" class="flex flex-col gap-3">
             <p role="alert" class="m-0 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               {{ pageError }}
             </p>
-            <button
-              v-if="!auth.isAdmin"
-              type="button"
-              class="w-fit text-sm font-semibold text-navy underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy/40"
-              @click="eligiendoSede = true"
-            >
-              Cambiar sede
-            </button>
           </div>
           <p v-else-if="pageLoading" class="m-0 text-sm text-slate-600">Validando sala y token QR…</p>
 

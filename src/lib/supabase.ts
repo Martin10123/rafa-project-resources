@@ -28,9 +28,9 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
-        // implicit: el enlace del correo funciona aunque Outlook/otro navegador lo abra
-        // (PKCE falla con "code verifier not found" en esos casos)
-        flowType: 'implicit',
+        // PKCE: el código del correo se cambia por la sesión en este navegador.
+        // El enlace tiene que abrirse donde se pidió (el verificador no viaja en la URL).
+        flowType: 'pkce',
       },
     })
   : null

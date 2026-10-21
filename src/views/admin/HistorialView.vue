@@ -43,6 +43,7 @@ const salaOptions = computed(() => {
 function sedeInicial(): string | null {
   const saved = readVistaSede()
   if (auth.isAdmin) return saved ?? 'all'
+  if (auth.perfil?.sede_id) return auth.perfil.sede_id
   return isSedeUuid(saved) ? saved : null
 }
 

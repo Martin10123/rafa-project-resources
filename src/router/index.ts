@@ -95,7 +95,7 @@ router.beforeEach(async (to) => {
 
   if (auth.isAuthenticated && to.name === 'inicio') {
     if (auth.isAdmin) return { name: 'admin-dashboard' }
-    if (auth.isJefa) return { name: 'admin-historial' }
+    if (auth.isJefa && auth.perfil?.sede_id) return { name: 'admin-historial' }
   }
 
   if (needsAdmin && auth.isAuthenticated && !auth.isAdmin) {

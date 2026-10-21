@@ -316,7 +316,7 @@ export const useAdminStore = defineStore('admin', () => {
       }
       const client = supabase!
       const [{ data: salas, error: e1 }, { data: abiertos, error: e2 }] = await Promise.all([
-        client.from('salas').select('*').order('nombre'),
+        client.rpc('listar_salas'),
         client
           .from('registros')
           .select('id, sala_id, usuario_id, motivo, entrada, perfiles(nombre, email)')
@@ -338,8 +338,9 @@ export const useAdminStore = defineStore('admin', () => {
         })
         openBySala.set(row.sala_id, list)
       }
-      dashboardSalas.value = (salas ?? []).map((sala) => ({
-        ...(sala as Sala),
+      const salasFilas = (salas ?? []) as Sala[]
+      dashboardSalas.value = salasFilas.map((sala) => ({
+        ...sala,
         openRegistros: openBySala.get(sala.id) ?? [],
       }))
       fetchedAt.dashboard = Date.now()
@@ -556,7 +557,7 @@ export const useAdminStore = defineStore('admin', () => {
         return
       }
       const [{ data: salas, error: e1 }, { data: horarios, error: e2 }] = await Promise.all([
-        supabase!.from('salas').select('*').order('nombre'),
+        supabase!.rpc('listar_salas'),
         supabase!.from('horarios').select('*').order('sala_id').order('dia_semana'),
       ])
       if (e1) throw e1
@@ -698,23 +699,16 @@ export const useAdminStore = defineStore('admin', () => {
       await fetchSalasAndHorarios({ force: true })
       return
     }
-    if (replaceIds.length) {
-      const { error } = await supabase!.from('horarios').delete().in('id', replaceIds)
-      if (error) throw error
-    }
-    if (dias.length) {
-      const { error } = await supabase!.from('horarios').insert(
-        dias.map((dia) => ({
-          sala_id: payload.salaId,
-          dia_semana: dia,
-          hora_inicio: payload.horaInicio,
-          hora_fin: payload.horaFin,
-        })),
-      )
-      if (error) throw error
-    }
-    await fetchSalasAndHorarios({ force: true })
-  }
+    const { error } = await supabase!.rpc('guardar_franja_dias', {
+    p_sala_id: payload.salaId,
+    p_dias: dias,
+    p_hora_inicio: payload.horaInicio,
+    p_hora_fin: payload.horaFin,
+    p_replace_ids: replaceIds,
+  })
+  if (error) throw error
+  await fetchSalasAndHorarios({ force: true })
+}
 
   async function deleteHorario(horarioId: string) {
     invalidateDerived()

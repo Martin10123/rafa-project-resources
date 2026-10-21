@@ -11,8 +11,6 @@ import type { Sede } from '../types'
 const router = useRouter()
 const auth = useAuthStore()
 const sedes = ref<Sede[]>([])
-const cambiandoSede = ref(false)
-
 const miSede = computed(
   () => sedes.value.find((sede) => sede.id === auth.perfil?.sede_id) ?? null,
 )
@@ -28,7 +26,7 @@ async function cargarSedes() {
 
 function redirigirStaff() {
   if (auth.isAdmin) return router.replace('/admin')
-  if (auth.isJefa) return router.replace('/admin/historial')
+  if (auth.isJefa && auth.perfil?.sede_id) return router.replace('/admin/historial')
   return null
 }
 
@@ -38,7 +36,7 @@ onMounted(async () => {
     await router.replace('/login')
     return
   }
-  if (auth.isAdmin || auth.isJefa) {
+  if (auth.isAdmin || (auth.isJefa && auth.perfil?.sede_id)) {
     await redirigirStaff()
     return
   }
@@ -57,20 +55,15 @@ watch(
 )
 
 async function onSedeSaved() {
-  cambiandoSede.value = false
   await cargarSedes()
+  await redirigirStaff()
 }
 </script>
 
 <template>
   <AppLayout>
     <div class="mx-auto flex w-full max-w-lg flex-col gap-5 py-2">
-      <SedePicker
-        v-if="!miSede || cambiandoSede"
-        :cancelable="Boolean(miSede)"
-        @saved="onSedeSaved"
-        @cancel="cambiandoSede = false"
-      />
+      <SedePicker v-if="!miSede" @saved="onSedeSaved" />
 
       <template v-else>
         <div>
@@ -90,20 +83,11 @@ async function onSedeSaved() {
             de la sala. Solo funcionan las salas de <strong>{{ miSede.nombre }}</strong>.
           </p>
           <p class="mt-3 mb-0 text-sm leading-relaxed text-slate-600">
-            Un QR de otra sede no abre el check-in. Si la sede no es la tuya, cámbiala antes de
-            escanear.
+            Un QR de otra sede no abre el check-in. La sede queda fija después de elegirla.
           </p>
         </div>
 
         <div class="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            label="Cambiar sede"
-            icon="pi pi-map-marker"
-            severity="secondary"
-            outlined
-            @click="cambiandoSede = true"
-          />
           <Button
             type="button"
             label="Cerrar sesión"
