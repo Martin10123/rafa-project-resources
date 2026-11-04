@@ -30,6 +30,7 @@ export interface Perfil {
   email: string
   nombre: string | null
   sede_id: string | null
+  rol: 'auxiliar' | 'monitor' | 'superadmin' | null
 }
 
 export interface Registro {

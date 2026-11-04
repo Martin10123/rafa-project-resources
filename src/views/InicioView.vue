@@ -63,7 +63,32 @@ async function onSedeSaved() {
 <template>
   <AppLayout>
     <div class="mx-auto flex w-full max-w-lg flex-col gap-5 py-2">
-      <SedePicker v-if="!miSede" @saved="onSedeSaved" />
+      <template v-if="auth.sinPermiso">
+        <div>
+          <p class="m-0 text-[0.72rem] font-bold tracking-[0.14em] text-[#9f1239] uppercase">
+            Cuenta sin acceso
+          </p>
+          <h1 class="m-0 mt-2 text-3xl font-extrabold tracking-tight text-navy">No tienes permisos</h1>
+        </div>
+        <div class="glass-panel p-5 sm:p-6">
+          <p class="m-0 text-base leading-relaxed text-slate-800">
+            Tu cuenta no tiene un rol asignado, así que no puedes usar las salas.
+            Comunícate con el administrador para que te habilite el acceso.
+          </p>
+        </div>
+        <div>
+          <Button
+            type="button"
+            label="Cerrar sesión"
+            icon="pi pi-sign-out"
+            severity="secondary"
+            outlined
+            @click="signOut"
+          />
+        </div>
+      </template>
+
+      <SedePicker v-else-if="!miSede" @saved="onSedeSaved" />
 
       <template v-else>
         <div>

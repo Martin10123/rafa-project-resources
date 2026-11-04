@@ -21,11 +21,16 @@ const allLinks: NavLink[] = [
   { to: '/admin/auditoria', label: 'Auditoría', icon: 'pi pi-shield' },
 ]
 
-const links = computed<NavLink[]>(() =>
-  auth.isJefa && !auth.isAdmin
-    ? [{ to: '/admin/historial', label: 'Historial', icon: 'pi pi-download' }]
-    : allLinks,
-)
+const links = computed<NavLink[]>(() => {
+  if (auth.isJefa && !auth.isAdmin) {
+    return [{ to: '/admin/historial', label: 'Historial', icon: 'pi pi-download' }]
+  }
+  if (!auth.isAdministrador) return allLinks
+  return [
+    ...allLinks,
+    { to: '/admin/roles', label: 'Roles', icon: 'pi pi-users' },
+  ]
+})
 
 const pageTitle = computed(() => {
   const match = links.value.find((l) =>

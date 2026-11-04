@@ -67,6 +67,12 @@ const router = createRouter({
           component: () => import('../views/admin/AuditoriaView.vue'),
           meta: { requiresAdmin: true },
         },
+        {
+          path: 'roles',
+          name: 'admin-roles',
+          component: () => import('../views/admin/RolesView.vue'),
+          meta: { requiresAdmin: true, requiresAdministrador: true },
+        },
       ],
     },
   ],
@@ -83,6 +89,7 @@ router.beforeEach(async (to) => {
 
   const needsAuth = to.matched.some((record) => record.meta.requiresAuth)
   const needsAdmin = to.matched.some((record) => record.meta.requiresAdmin)
+  const needsAdministrador = to.matched.some((record) => record.meta.requiresAdministrador)
   const needsStaff = to.matched.some((record) => record.meta.requiresStaff)
   const guestOnly = to.matched.some((record) => record.meta.guestOnly)
 
@@ -93,6 +100,10 @@ router.beforeEach(async (to) => {
     }
   }
 
+  if (auth.isAuthenticated && auth.sinPermiso && to.name === 'sala') {
+    return { name: 'inicio' }
+  }
+
   if (auth.isAuthenticated && to.name === 'inicio') {
     if (auth.isAdmin) return { name: 'admin-dashboard' }
     if (auth.isJefa && auth.perfil?.sede_id) return { name: 'admin-historial' }
@@ -100,6 +111,10 @@ router.beforeEach(async (to) => {
 
   if (needsAdmin && auth.isAuthenticated && !auth.isAdmin) {
     return auth.isJefa ? { name: 'admin-historial' } : { name: 'inicio' }
+  }
+
+  if (needsAdministrador && auth.isAuthenticated && !auth.isAdministrador) {
+    return auth.isAdmin ? { name: 'admin-dashboard' } : { name: 'inicio' }
   }
 
   if (needsStaff && auth.isAuthenticated && !auth.isAdmin && !auth.isJefa) {

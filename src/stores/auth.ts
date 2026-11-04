@@ -84,12 +84,18 @@ export const useAuthStore = defineStore('auth', () => {
   const email = ref<string | null>(null)
   const perfil = ref<Perfil | null>(null)
   const isAdmin = ref(false)
+  const isAdministrador = ref(false)
   const isSuperadmin = ref(false)
   const isJefa = ref(false)
   const ready = ref(false)
   const demoMode = ref(false)
 
   const isAuthenticated = computed(() => Boolean(userId.value))
+  const sinPermiso = computed(() => {
+    if (!isAuthenticated.value || isAdmin.value || isJefa.value) return false
+    const rol = perfil.value?.rol
+    return rol !== 'auxiliar' && rol !== 'monitor' && rol !== 'superadmin'
+  })
   const usesSupabase = computed(() => isSupabaseConfigured)
   let ultimoMarcado = 0
   /** Sube en cada login o salida para ignorar cargas que terminan tarde. */
@@ -139,6 +145,7 @@ export const useAuthStore = defineStore('auth', () => {
     email.value = null
     perfil.value = null
     isAdmin.value = false
+    isAdministrador.value = false
     isSuperadmin.value = false
     isJefa.value = false
     demoMode.value = false
@@ -189,6 +196,7 @@ export const useAuthStore = defineStore('auth', () => {
     email.value = payload.email
     perfil.value = payload.perfil ?? null
     isAdmin.value = payload.isAdmin ?? false
+    isAdministrador.value = payload.isAdmin ?? false
     isSuperadmin.value = false
     isJefa.value = false
     demoMode.value = false
@@ -204,8 +212,10 @@ export const useAuthStore = defineStore('auth', () => {
       email: normalized,
       nombre: null,
       sede_id: null,
+      rol: null,
     }
     isAdmin.value = !isSupabaseConfigured
+    isAdministrador.value = !isSupabaseConfigured
     isSuperadmin.value = false
     isJefa.value = false
     persistDemoSession()
@@ -216,7 +226,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     const { data: perfilData, error: perfilError } = await supabase
       .from('perfiles')
-      .select('id, email, nombre, sede_id')
+      .select('id, email, nombre, sede_id, rol')
       .eq('id', uid)
       .maybeSingle()
 
@@ -225,6 +235,7 @@ export const useAuthStore = defineStore('auth', () => {
     perfil.value = (perfilData as Perfil | null) ?? null
 
     let nextAdmin = false
+    let nextAdministrador = false
     let nextSuperadmin = false
     let nextJefa = false
 
@@ -249,6 +260,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (!sesionVigente(epoch)) return
     if (!adminError && adminRow) {
       nextAdmin = true
+      nextAdministrador = true
     } else if (!nextAdmin) {
       const { data: rpcAdmin, error: rpcError } = await supabase.rpc('is_admin')
       if (!rpcError && rpcAdmin === true) nextAdmin = true
@@ -274,6 +286,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (!sesionVigente(epoch)) return
     isSuperadmin.value = nextSuperadmin
     isAdmin.value = nextAdmin
+    isAdministrador.value = nextAdministrador
     isJefa.value = nextJefa
   }
 
@@ -605,7 +618,7 @@ export const useAuthStore = defineStore('auth', () => {
       .from('perfiles')
       .update({ nombre: trimmed })
       .eq('id', userId.value)
-      .select('id, email, nombre, sede_id')
+      .select('id, email, nombre, sede_id, rol')
       .single()
 
     if (error) {
@@ -633,7 +646,7 @@ export const useAuthStore = defineStore('auth', () => {
       .from('perfiles')
       .update({ sede_id: sedeId })
       .eq('id', userId.value)
-      .select('id, email, nombre, sede_id')
+      .select('id, email, nombre, sede_id, rol')
       .single()
 
     if (error) return { ok: false, message: error.message }
@@ -666,12 +679,14 @@ export const useAuthStore = defineStore('auth', () => {
     email,
     perfil,
     isAdmin,
+    isAdministrador,
     isSuperadmin,
     isJefa,
     ready,
     demoMode,
     usesSupabase,
     isAuthenticated,
+    sinPermiso,
     setSession,
     clearSession,
     init,

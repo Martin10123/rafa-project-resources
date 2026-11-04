@@ -28,6 +28,16 @@ export interface HistorialRow extends Registro {
   cerrado_por_email: string | null
 }
 
+export type RolAsignable = 'auxiliar' | 'monitor' | 'superadmin'
+
+export interface UsuarioRol {
+  user_id: string
+  email: string
+  nombre: string | null
+  rol: RolAsignable | null
+  es_administrador: boolean
+}
+
 export interface AuditoriaRow {
   id: string
   ocurrido_en: string
@@ -93,12 +103,14 @@ function createMockState() {
       email: 'estudiante1@tecnocomfenalco.edu.co',
       nombre: 'Ana García',
       sede_id: DEMO_SEDES[0].id,
+      rol: 'monitor',
     },
     {
       id: MOCK_USER_2,
       email: 'estudiante2@tecnocomfenalco.edu.co',
       nombre: 'Luis Pérez',
       sede_id: DEMO_SEDES[1].id,
+      rol: 'monitor',
     },
   ]
   const horarios: Horario[] = [
@@ -799,7 +811,7 @@ export const useAdminStore = defineStore('admin', () => {
     }
     const { data, error } = await supabase!
       .from('perfiles')
-      .select('id, email, nombre, sede_id')
+      .select('id, email, nombre, sede_id, rol')
       .order('email')
     if (error) throw error
     perfilesList.value = (data ?? []) as Perfil[]
@@ -808,6 +820,46 @@ export const useAdminStore = defineStore('admin', () => {
 
   async function fetchSedes() {
     sedesList.value = await loadSedes()
+  }
+
+  const rolesList = ref<UsuarioRol[]>([])
+
+  function esRol(value: string): value is RolAsignable {
+    return value === 'auxiliar' || value === 'monitor' || value === 'superadmin'
+  }
+
+  async function fetchRoles() {
+    if (demoMode.value) {
+      rolesList.value = mock.perfiles.map((perfil) => ({
+        user_id: perfil.id,
+        email: perfil.email,
+        nombre: perfil.nombre,
+        rol: 'monitor',
+        es_administrador: false,
+      }))
+      return
+    }
+    const { data, error } = await supabase!.rpc('listar_roles')
+    if (error) throw error
+    rolesList.value = ((data ?? []) as UsuarioRol[]).map((row) => ({
+      ...row,
+      rol: row.rol && esRol(row.rol) ? row.rol : null,
+    }))
+  }
+
+  async function asignarRol(userId: string, rol: RolAsignable) {
+    const actual = rolesList.value.find((row) => row.user_id === userId)
+    if (!actual || actual.es_administrador || actual.rol === rol) return
+    if (demoMode.value) {
+      actual.rol = rol
+      return
+    }
+    const { error } = await supabase!.rpc('asignar_rol', {
+      p_user_id: userId,
+      p_rol: rol,
+    })
+    if (error) throw error
+    actual.rol = rol
   }
 
   function resetMockDemo() {
@@ -825,6 +877,7 @@ export const useAdminStore = defineStore('admin', () => {
     sedesList,
     horariosList,
     perfilesList,
+    rolesList,
     margenGraciaMinutos,
     auditoriaRows,
     auditoriaTotal,
@@ -847,6 +900,8 @@ export const useAdminStore = defineStore('admin', () => {
     saveMargenGracia,
     fetchAuditoria,
     fetchPerfilesForFilter,
+    fetchRoles,
+    asignarRol,
     resetMockDemo,
   }
 })

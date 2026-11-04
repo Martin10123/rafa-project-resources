@@ -26,6 +26,7 @@ const ETIQUETA: Record<string, string> = {
   tipo_cierre: 'Tipo de cierre',
   email: 'Correo',
   valor: 'Valor',
+  rol: 'Rol',
   entrada: 'Entrada',
   sede_id: 'Sede',
 }
@@ -54,6 +55,11 @@ function formatearValor(clave: string, value: unknown): string {
   if (value == null || value === '') return '—'
   if (typeof value === 'boolean') return value ? 'Sí' : 'No'
   if (clave === 'dia_semana' && typeof value === 'number') return DIA[value] ?? String(value)
+  if (clave === 'rol' && typeof value === 'string') {
+    if (value === 'auxiliar') return 'Auxiliar'
+    if (value === 'monitor') return 'Monitor'
+    if (value === 'superadmin') return 'Superadmin'
+  }
   if (clave === 'tipo_cierre' && typeof value === 'string') {
     if (value === 'usuario') return 'Usuario'
     if (value === 'admin') return 'Administrador'

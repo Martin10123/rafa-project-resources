@@ -84,6 +84,9 @@ function mapRegistroError(message: string): string {
   if (lower.includes('no coincide')) {
     return 'El QR no coincide con esta sala. Escanea el código actualizado.'
   }
+  if (lower.includes('rol asignado') || lower.includes('comunícate con el administrador')) {
+    return 'No tienes un rol asignado. Comunícate con el administrador.'
+  }
   if (lower.includes('no tiene sede asignada')) {
     return 'Esta sala todavía no tiene sede. Avisa a quien administra las salas.'
   }
