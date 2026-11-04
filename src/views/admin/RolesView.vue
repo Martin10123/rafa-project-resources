@@ -70,7 +70,7 @@ async function cambiar(persona: UsuarioRol, rol: RolAsignable | null) {
   <section class="admin-page">
     <AdminPageHeader
       title="Roles"
-      description="Solo el administrador asigna auxiliar, monitor o superadmin. Sin rol, la cuenta ve un aviso para comunicarse contigo. Auxiliar y monitor hacen check-in. Superadmin entra al panel, sin este apartado."
+      description="El administrador y el superadmin asignan auxiliar, monitor o superadmin. Sin rol, la cuenta ve un aviso para comunicarse con el administrador. Auxiliar y monitor hacen check-in."
     >
       <template #meta>
         <Message v-if="admin.demoMode" severity="warn" :closable="false" class="demo-banner">

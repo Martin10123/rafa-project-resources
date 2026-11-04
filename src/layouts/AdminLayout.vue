@@ -25,11 +25,13 @@ const links = computed<NavLink[]>(() => {
   if (auth.isJefa && !auth.isAdmin) {
     return [{ to: '/admin/historial', label: 'Historial', icon: 'pi pi-download' }]
   }
-  if (!auth.isAdministrador) return allLinks
-  return [
-    ...allLinks,
-    { to: '/admin/roles', label: 'Roles', icon: 'pi pi-users' },
-  ]
+  if (auth.isAdministrador || auth.isSuperadmin) {
+    return [
+      ...allLinks,
+      { to: '/admin/roles', label: 'Roles', icon: 'pi pi-users' },
+    ]
+  }
+  return allLinks
 })
 
 const pageTitle = computed(() => {
